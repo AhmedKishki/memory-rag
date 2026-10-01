@@ -76,9 +76,18 @@ no restating a title as its own first sentence.
   silent model re-download. `tests/test_registry.py` and `tests/test_documentation.py`
   state each one and fail if it moves.
 - The on-disk contract is frozen for as long as `memory-ultra-rag-mcp-server` is
-  installed, because that server reads and writes the same files. `project.json` may
-  only be extended additively; `source-metadata.json` and `source-catalog.json` belong
-  to the research app and are not this product's to change.
+  installed, because that server reads and writes the same files. Its values are pinned
+  in `tests/test_compatibility.py` and they are these: the record is `memory.sqlite3`
+  under `<project-root>/.memory-rag/` and `<storage-root>/memory/default/`; its schema
+  version is `8`; the statement table is an FTS5 table so the word index and the record
+  are the same rows; the vector table's columns are `unit_key`, `stamp`, `kind`,
+  `model`, `dimension`, `components`, and a changed shape is dropped and rebuilt, which
+  on a record the other product serves means losing every meaning it held; and the
+  rendered document is prose under a heading with no kind in each line, because that is
+  what the other product's parser reads. A value here cannot move while that server is
+  installed, because it cannot move there either.
+- `project.json` may only be extended additively; `source-metadata.json` and
+  `source-catalog.json` belong to the research app and are not this product's to change.
 - The project record (`projects.json`) is a pointer and never a state cache. It holds
   an id, a name, and a root, and nothing a memory owns. Deleting it is how a project
   is unregistered; nothing in it has to be rebuilt.
