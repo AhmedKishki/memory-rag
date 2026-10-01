@@ -1,0 +1,78 @@
+# Default settings for memory-ultra-rag-mcp.
+#
+# This file ships inside the package and holds every tunable this server reads.
+# A layer above it names only what it changes; layers win per key, lowest first:
+#
+#   this file  <  ~/.config/memory-ultra-rag-mcp/config.toml
+#              <  <project>/.memory-rag/config.toml
+#              <  --config PATH
+#              <  MEMORY_ULTRARAG_* environment variables
+#              <  --set key=value
+#
+# The user layer is the one that applies globally: one file in the account's
+# config directory changes every project on this account, and a project may still
+# narrow it for itself.
+#
+# `memory-ultra-rag-mcp --print-config` prints the merged result and names the
+# layer that supplied each value. A key that is not declared here is refused in
+# every layer, so a typo is an error rather than a silent default.
+#
+# A setting whose class is `identity` decides what a memory is made of: its value
+# is written beside the statements it produced, and changing it means the
+# statements are embedded again rather than mixed with another's space. `AGENTS.md`
+# records the constants that deliberately stay in code: the schema version, the
+# file names that make up a scope, and the kinds a statement may be filed under
+# being a word rather than a closed list.
+
+[runtime]
+# Shared FastEmbed model cache; empty means this application's own per-user cache.
+# The two servers in this collection are independent, so neither reads the other's
+# cache, but a machine that fetches the same two models for several projects can
+# point them at one place.
+model_cache_root = ""
+
+[retrieval]
+# A dense candidate below this cosine is dropped, so a query with nothing to do
+# with the memory abstains instead of being handed the nearest thing. Raising it
+# makes a read narrower; lowering it makes it looser.
+cosine_floor = 0.72
+# A candidate under the floor is admitted only when the query's own best
+# candidate cleared the floor and this one is within this much of it.
+relative_margin = 0.10
+# Reciprocal rank fusion: each side contributes weight / (rrf_k + rank), so these
+# three decide how a statement found by words competes with one found by meaning.
+bm25_weight = 1.25
+dense_weight = 1.0
+rrf_k = 60
+# What fraction of its own score a statement is worth for being the newest of the
+# candidates that matched about as well: the newest gets the whole bonus, the next
+# half of it, and so on. Zero turns the preference off, which is what a memory that
+# must be reproducible from its own scores wants.
+recency_bonus = 0.1
+# How alike two statements may be before the second one is refused as a
+# repetition of the first. Recording a statement that already means what the memory
+# says is how a memory fills with two answers to one question, and at 0.99 the two
+# differ by wording rather than by meaning. The check is against the memory being
+# written, not the account's, so a project may restate a rule it inherits. A value
+# above 1 is unreachable for a cosine and so turns the check off; 1.0 itself refuses
+# only a statement that is the same sentence twice.
+duplicate_cosine = 0.99
+# How many candidates each side contributes before fusion, and how many of the
+# fused candidates the cross-encoder reads. These are internal depths rather than
+# the answer: a read returns exactly the `limit` the caller asked for, and
+# `rerank_depth` of 1 reranks on the single best candidate rather than skipping
+# the reranker.
+pool_depth = 50
+rerank_depth = 10
+
+[dense]
+# The local model a scope's vectors are built with. Two memories built with
+# different models are different spaces, so changing this means the statements
+# are embedded again; `memory-ultra-rag-reindex` does that. (identity.)
+embedding_model = "BAAI/bge-small-en-v1.5"
+# The local cross-encoder that orders every read's candidates. A memory's
+# statements are one line each, where a bi-encoder's vector is weakest and a
+# cross-encoder reads the pair rather than either side alone. It costs about
+# 5 ms a candidate, which is what bounds `retrieval.rerank_depth`. Every read is
+# reranked: there is no empty value that turns this off.
+reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"

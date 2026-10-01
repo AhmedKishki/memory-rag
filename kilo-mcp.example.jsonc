@@ -1,0 +1,26 @@
+// Print the entry this machine needs, with its own executable and storage root:
+//   memory-rag --project MY-PROJECT mcp-entry
+// Check one already in place, without editing it:
+//   memory-rag --project MY-PROJECT mcp-entry --check <this file>
+//
+// This entry is the stdio bridge, so it starts the app for the account if it is not
+// up. It names the project and not its directory, so the same entry serves the
+// project on every machine where it was initialised.
+{
+  "mcp": {
+    "memory-rag": {
+      "type": "local",
+      "command": [
+        "/ABSOLUTE/PATH/TO/memory-rag/.venv/bin/memory-rag",
+        "--storage-root",
+        "/ABSOLUTE/PATH/TO/your/storage/root",
+        "--project",
+        "MY-PROJECT",
+        "mcp"
+      ],
+      "environment": {},
+      "enabled": true,
+      "timeout": 3600000
+    }
+  }
+}

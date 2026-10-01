@@ -1,0 +1,45 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two versions the package declares. `3.11` is the floor and `3.12` is
+        # what `.python-version` pins, so both are exercised on every change.
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python }}
+
+      # `.python-version` outranks `--python`, so the environment has to be told
+      # rather than the command.
+      - name: Install dependencies
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+        run: uv sync --frozen
+
+      - name: Formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Byte-compile
+        run: uv run python -m compileall -q src tests

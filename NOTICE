@@ -1,0 +1,82 @@
+memory-rag Copyright 2026 Ahmed Kishki
+
+This project is licensed under the Apache License, Version 2.0. See LICENSE.
+
+ULTRARAG ATTRIBUTION
+
+memory-rag serves UltraRAG's memory: one standing document per scope, kept in a SQLite
+record with a word index and vectors, and reached through the tools record_memory,
+recall_memory, forget_memory, and record_handoff.
+
+The behaviour, the file names, and the file formats are UltraRAG's, taken from the
+upstream repository at a pinned revision:
+
+  Upstream repository: https://github.com/OpenBMB/UltraRAG
+  Upstream revision:   3a709a2aea3fbe46acca59c422621c94b6e86857
+  Declared version:    0.3.0.2
+  Reference file:      servers/memory/src/memory.py
+  Upstream license:    Apache License 2.0
+
+No UltraRAG source file is copied, vendored, or redistributed by this project. The
+behaviour and the formats were reimplemented in original Python from that reference, and
+this project's output is checked against files the upstream server at that revision
+produced, which are committed under tests/fixtures/upstream/ with the method used to
+capture them.
+
+THE DIFFERENCE THIS PROJECT MAKES
+
+The record is the same and the four memory tools are the same. What changed is where
+the memory is managed from: one process now holds the account's global memory and every
+project's local memory at once, and serves a browser workspace, an agent surface, and a
+command line from one loopback port. An agent's surface is unchanged — the same four
+tools, with the same arguments and the same answers — because the tools are what an
+agent should have and the rest is a person's work.
+
+The workspace and the command line add a SQL panel, which reads the record without
+restriction and writes only the `unit` table. An accepted write re-renders the standing
+document, drops the vectors of the statements it changed, and queues them again, so a
+hand edit cannot leave a memory whose words and whose vectors disagree.
+
+The account's settings directory, the environment variable prefix, the model cache,
+and the scope directory names keep the names the previous product used, and the
+on-disk contract is frozen while that product is installed, because both read and write
+the same files.
+
+LOCAL MODEL AND LIBRARY ATTRIBUTION
+
+A lookup runs a local sentence embedder on the CPU, and the search uses a word index.
+The weights are fetched once from the model host into this project's own cache and then
+run in this process. No API is used at any point, and no data leaves the machine.
+
+  Embedding model:  BAAI/bge-small-en-v1.5 (default; others are listed in
+                    src/memory_rag/models.py)
+  Model license:    MIT (BAAI)
+  Rerankers:        jinaai/jina-reranker-v2-base-multilingual and others, listed in
+                    the same file
+  Run-time library: fastembed (Apache License 2.0), embedding via ONNX Runtime (MIT)
+  Arithmetic:       numpy (BSD 3-Clause)
+  Word index:       SQLite FTS5, part of the Python standard library's sqlite3 module
+
+The models are data, not source: none of their code is copied or redistributed here, and
+each carries its own licence.
+
+THE BROWSER WORKSPACE
+
+The workspace is built on ui-ultra-rag-mcp, an independent companion project that
+provides reusable local UI infrastructure for UltraRAG-derived MCP servers, pinned here
+by commit. It is not part of UltraRAG and carries no UltraRAG code. This project
+supplies a thin adapter and a profile; no part of the workspace is copied in, and this
+project declares the corpus capabilities off because it serves memories rather than
+documents.
+
+The settings layer is built on config-ultra-rag-mcp, an independent companion project,
+likewise pinned by commit. Neither companion project reads this project's storage, and
+this project reads neither of theirs.
+
+UltraRAG is developed by its team and contributors, including participants from THUNLP,
+Tsinghua University, NEUIR, Northeastern University, OpenBMB, and AI9stars. The UltraRAG
+name is used only to describe what this project serves.
+
+This project is an independent project. It is not an official release of UltraRAG and is
+not affiliated with or endorsed by UltraRAG, THUNLP, Tsinghua University, NEUIR,
+Northeastern University, OpenBMB, AI9stars, or their contributors.

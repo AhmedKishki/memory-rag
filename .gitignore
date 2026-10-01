@@ -1,0 +1,13 @@
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Never committed: a stray log or scratch directory from a run or a comparison.
+logs/
+.logs/

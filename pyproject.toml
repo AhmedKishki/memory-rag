@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-rag"
+version = "0.1.0"
+description = "A command center for an account's global memory and every project's local memory, with a browser workspace, an agent surface, and a command line on one loopback port"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Ahmed Kishki" }]
+keywords = ["mcp", "memory", "ultrarag", "agent-continuity"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    # The layer stack behind the settings: the registry type, the merge, the
+    # coercion every layer shares, the provenance, and the path helpers. Pinned
+    # by commit, as the sibling repositories do, because two products sharing it
+    # is the whole point and a floating version is not.
+    "config-ultra-rag-mcp @ git+https://github.com/AhmedKishki/config-ultra-rag-mcp.git@cbd47bb46efe85340de34f8f8f13fc6516e7fecb",
+    # Local models, on CPU, run in process. The embedder is what makes a lookup
+    # work without assuming the caller's wording; numpy is the exact vector scan
+    # behind it, and is pinned explicitly rather than through onnxruntime.
+    "fastembed==0.8.0",
+    "fastmcp==3.4.0",
+    "filelock>=3.16,<5",
+    "numpy>=1.26,<3",
+    "platformdirs==4.11.10",
+    # The control channel between the command line and the running app.
+    "httpx>=0.28",
+    # The shared browser view. Pinned by commit, as the sibling repositories do:
+    # the workspace is interface infrastructure with its own release history.
+    "ui-ultra-rag-mcp @ git+https://github.com/AhmedKishki/ui-ultra-rag-mcp.git@f255701c25ffafcfee2d25b700b777d85247eb17",
+]
+
+[project.scripts]
+memory-rag = "memory_rag.surfaces.cli:main"
+
+[project.urls]
+Repository = "https://github.com/AhmedKishki/memory-rag"
+Issues = "https://github.com/AhmedKishki/memory-rag/issues"
+"Upstream UltraRAG" = "https://github.com/OpenBMB/UltraRAG"
+"UltraRAG Documentation" = "https://ultrarag.openbmb.cn/"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    # The service is async because it opens records and models off the event loop, and
+    # auto mode means a test states what it checks rather than how it is awaited.
+    "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.4.0",
+    # The same ruff the sibling repositories pin, so the gates are identical.
+    "ruff==0.16.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# The default settings ship with the package: the code has no copy of them, and
+# `sources_for` reads this one file from beside `settings.py`. Without this the
+# built wheel has no defaults and the app refuses to start.
+memory_rag = ["default.toml"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: starts the real app or the real stdio server in a child process",
+    "upstream: compares against a UltraRAG checkout when ULTRARAG_CHECKOUT is set",
+]
+# A hang has no diagnostic and blocks CI until the GitHub limit, and several
+# tests spawn real subprocesses. The thread method is deliberate: the signal
+# default misses a hang inside a C extension such as ONNX inference. It kills the
+# whole pytest process after dumping every thread's stack, which is what CI wants
+# and not what a developer's long local run wants, so a developer passes
+# `--timeout=0` to turn it off.
+timeout = 300
+timeout_method = "thread"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+extend-select = ["ASYNC", "BLE001", "C901", "RUF100", "SIM"]
+
+[tool.ruff.lint.mccabe]
+# The same bar the sibling repositories set, for the same reason: the engine was
+# written against this rule and refactoring it is not what this build is for. A new
+# function above 25 fails, so the number cannot creep.
+max-complexity = 25
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and benchmark harnesses are async coroutines that touch the filesystem
+# by design and serve no concurrent traffic. src/ keeps both rules.
+"tests/**" = ["ASYNC109", "ASYNC240"]
+"scripts/**" = ["ASYNC240"]

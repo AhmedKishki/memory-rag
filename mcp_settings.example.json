@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "memory-rag": {
+      "command": "/ABSOLUTE/PATH/TO/memory-rag/.venv/bin/memory-rag",
+      "args": [
+        "--storage-root",
+        "/ABSOLUTE/PATH/TO/your/storage/root",
+        "--project",
+        "MY-PROJECT",
+        "mcp"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [],
+      "timeout": 3600
+    }
+  }
+}
