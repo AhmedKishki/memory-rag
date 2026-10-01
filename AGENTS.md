@@ -12,14 +12,14 @@ Rules a change to this product has to be argued against: what the product is, wh
 ## Documentation responsibilities
 
 - One home per fact, or the two homes will disagree:
-  - `README.md`: the user manual — installing, the first command, every command, the limits.
-  - `STORAGE.md`: the state format — every directory, file, column, and field name.
-  - `AGENTS.md`: these rules.
-  - a module's own docstring: why that module does what it does, and what it may never do.
-- A module's docstring is load-bearing rather than decorative. A rule stated in two places will be found disagreeing with itself, and the disagreement is settled by whichever copy a reader happened to open.
-- Markdown describes the present:
-  - no review logs, finding lists, change histories, before-and-after narratives, or recorded decisions, and a finished item leaves no trace except the code and the commit,
-  - no "previously", "used to", "was", or "before this change".
+  - `README.md` holds the user manual: installing, the first command, every command, and the limits.
+  - `STORAGE.md` holds the state format: every directory, file, column, and field name.
+  - `AGENTS.md` holds these rules.
+  - A module's own docstring holds why that module does what it does, and what it may never do.
+- A module's docstring is load-bearing rather than decorative. A rule stated in two places will be found disagreeing with itself, and the disagreement will be settled by whichever copy a reader happened to open.
+- Markdown describes the present, so it carries no review log, finding list, change history, before-and-after narrative, or recorded decision.
+  - A finished item leaves no trace except the code and the commit.
+  - The words "previously", "used to", "was", and "before this change" do not appear in it.
 - Cross-references name a file by path, never a section number.
 - Every sentence is direct: one fact per sentence, no filler, no selling, and no title restated as its own first sentence.
 
@@ -49,11 +49,7 @@ Rules a change to this product has to be argued against: what the product is, wh
 - One app per account, in one process, holding one set of memories.
   - Two apps over one account would each hold their own copy of every memory and neither would know.
 - Every path this product writes inside a project carries `memory-rag`, so two products serving one repository cannot stop each other or read each other's runtime.
-- These names keep what the frozen server looks up:
-  - the account's settings directory, `memory-ultra-rag-mcp`,
-  - the `MEMORY_ULTRARAG_*` environment prefix,
-  - the model cache,
-  - the scope directory names.
+- These four names keep what the frozen server looks up: the account's settings directory, `memory-ultra-rag-mcp`; the `MEMORY_ULTRARAG_*` environment prefix; the model cache; and the scope directory names.
   - Renaming any of them strands every existing memory and forces a silent model re-download, and `tests/test_registry.py` and `tests/test_documentation.py` state each one and fail if it moves.
 - The on-disk contract is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because that server reads and writes the same files.
   - The record is `memory.sqlite3`, under `<project-root>/.memory-rag/` and `<storage-root>/memory/default/`.
@@ -82,10 +78,7 @@ Rules a change to this product has to be argued against: what the product is, wh
 - The tables behind a statement are not separate from it.
   - `unit` is an FTS5 virtual table, so the words that find a statement and the statement itself are the same rows, and a hand edit cannot put them out of step.
   - The one thing an edit can leave behind is a vector describing text the statement no longer holds.
-- An accepted write does exactly three things:
-  - it re-renders the standing document,
-  - it drops the vectors of the statements it touched,
-  - it queues them again.
+- An accepted write does exactly three things: it re-renders the standing document, it drops the vectors of the statements it touched, and it queues them again.
   - Which statements it touched is found by comparing the record before and after, never by reading the write's own `WHERE` clause, because a `WHERE` that was wrong once will be wrong again and the consequence is a vector left describing a statement that is gone.
 - Nothing here is a second implementation of record, forget, or handoff. It is a bounded way to repair a statement, and the tests exist to keep it bounded.
 

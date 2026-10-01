@@ -3,7 +3,7 @@
 The on-disk format: every directory, file, column, and field name. The only document that defines a field name.
 
 - The format is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because that product reads and writes the same files.
-  - Adding to it is additive; renaming a path or a column is not available.
+  - A change may add to the format, but no change may rename a path or a column.
   - `AGENTS.md` states the rule and `tests/test_compatibility.py` pins the values.
 
 ## The two memories
@@ -98,11 +98,7 @@ The settings directory, the environment prefix, the model cache, and the scope d
 
 Every name carries `memory-rag`, so this product's runtime and another product's cannot be confused for one another.
 
-- The launcher is a generated POSIX script that owns:
-  - the free-port choice,
-  - the lock making that choice exclusive,
-  - the pid and port files,
-  - the log.
+- The launcher is a generated POSIX script that owns the free-port choice, the lock that makes that choice exclusive, the pid and port files, and the log.
   - Its first line names the version that wrote it, so a template change rewrites it rather than leaving an older command in place.
 - A recorded pid is believed only when the process it names still identifies itself as this app's own.
   - A pid file outlives its process and the number is reused, so a start that trusted the number would refuse to start, and a stop that trusted it would signal whatever the machine ran next.
@@ -155,11 +151,11 @@ Every column earns its place by naming its reader:
 
 `MEMORY.md`, written from the record and never read back as memory.
 
-- Newest statement at the top, each carrying its kind and its date.
-- Prose under a heading, with no kind in each line, because that is what the frozen product's parser reads.
-- A file beside the record is read exactly once, and only ever read:
-  - a record with nothing in it adopts a document left by an earlier version, which is how such a memory is recovered,
-  - anything the document still holds that the record lacks is imported and then removed.
+- The statement is newest at the top, and each one carries its kind and its date.
+- The document is prose under a heading, with no kind in each line, because that is what the frozen product's parser reads.
+- A file beside the record is read exactly once, and only ever read.
+  - A record with nothing in it adopts a document left by an earlier version, which is how such a memory is recovered.
+  - Anything the document still holds that the record lacks is imported and then removed.
 
 ## Durability
 

@@ -18,10 +18,10 @@ A command center for an account's global memory and every project's local memory
 
 ## Requirements
 
-- Python 3.11 or 3.12.
-- `uv`.
-- A SQLite built with FTS5, which the memory needs to match a statement by its words.
-- Roughly 150 MB of model binaries on the first semantic read, cached in the account's model cache and shared by every project on this machine.
+- The server needs Python 3.11 or 3.12.
+- The build needs [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+- A memory matches a statement by its words through SQLite built with FTS5.
+- The first semantic read downloads roughly 150 MB of model binaries into the account's model cache, which every project on this machine shares.
 
 ## Install
 
@@ -103,7 +103,7 @@ memory-rag sql --scope your-project --execute \
 
 - `INSERT`, `UPDATE`, and `DELETE` against the `unit` table are accepted.
 - `DROP`, `CREATE`, `ALTER`, `PRAGMA`, `ATTACH`, `VACUUM`, and anything writing `meta` or `vector` are refused by name.
-- One statement at a time.
+- A single statement is accepted per run.
 - An accepted write rewrites the standing document, drops the vectors of the statements it changed so they are embedded again, and says what it reindexed.
 
 ## The command line
