@@ -2,7 +2,7 @@
 
 An MCP client that speaks only stdio cannot open a socket, so this is the command that
 connects one: it makes sure the app is up, then proxies stdio to the app's agent
-endpoint on the app's own port. The proxy adds nothing — the four tools, the
+endpoint on the app's own port. The proxy adds nothing — the tools, the
 instructions, the scope resolution, and the models are the app's, so a stdio client and
 a browser cannot see two different states.
 

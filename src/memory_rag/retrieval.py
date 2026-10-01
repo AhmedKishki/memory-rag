@@ -34,6 +34,7 @@ from .store import (
     Statement,
     StoreError,
     admission_failure,
+    kind_named,
     statement_kind,
 )
 from .vectors import VectorStore
@@ -239,24 +240,26 @@ class Retrieval:
         *,
         content: str,
         directory: Path,
-        kind: str | None = None,
-        replace_kind: str | None = None,
+        kind: str,
     ) -> dict[str, Any]:
         """Record one statement in one memory, and say what was filed where.
 
-        The statement is a row: its text, the kind the caller named, its place at
-        the top of the document, and the time it was recorded. The document is
-        then written out from the record, because a memory nobody can open is not
-        one anybody can check.
+        The statement is a row: its text, the kind it is filed under, its place at the
+        top of the document, and the time it was recorded. The document is then
+        written out from the record, because a memory nobody can open is not one
+        anybody can check.
 
-        Two things are refused before the row is written, and both are refused on
-        the statement's own words rather than on anything derived, so the same text
-        is judged the same way every time. A statement carrying a date or a clock
-        time reports a moment instead of saying what holds, which is
-        :func:`store.admission_failure`'s one rule; and the reserved ``HANDOFF``
-        kind is refused here, because a handoff is replaced by the next one and an
-        ordinary record filed under it would be removed by the next session's
-        handoff without ever being seen.
+        Two things are refused before the row is written, and both are refused on the
+        statement's own words rather than on anything derived, so the same text is
+        judged the same way every time. A statement carrying a date or a clock time
+        reports a moment instead of saying what holds, which is
+        :func:`store.admission_failure`'s one rule; and a kind this product does not
+        file under is refused by name, with the kinds named beside it.
+
+        What the kind decides is not passed in from the caller. A kind whose lifetime
+        is bounded replaces what the memory already holds under it, so the eighth
+        handoff removes the seventh rather than standing beside it, and a caller
+        cannot forget to ask for that because there is nothing to ask for.
 
         Nothing is refused for being similar to what is already here. A memory that
         refuses a write is a memory a caller cannot write to, and deciding that on
@@ -275,17 +278,13 @@ class Retrieval:
             raise ModelError(failure)
         try:
             label = statement_kind(kind)
+            entry = kind_named(label)
         except StoreError as error:
             raise ModelError(str(error)) from error
-        if label == HANDOFF_KIND and replace_kind != HANDOFF_KIND:
-            raise ModelError(
-                "HANDOFF is reserved for record_handoff, which holds one and replaces "
-                "it with the next session's, so a statement filed under it here would "
-                "be removed by the next handoff. Use record_handoff, or file this "
-                "statement under a kind of your own."
-            )
         with MemoryIndex(directory) as index:
-            _key, replaced = index.insert(statement, label, replace_kind=replace_kind)
+            _key, replaced = index.insert(
+                statement, label, replace_kind=label if entry.replaces else None
+            )
             # A statement whose words were reworded is a new identity, and the
             # vector of the old one describes text the record no longer holds. The
             # write path is where that happens, so this is where they are dropped,
@@ -310,20 +309,14 @@ class Retrieval:
     def handoff(self, directory: Path, content: str) -> dict[str, Any]:
         """Put this session's handoff at the top, replacing the last one.
 
-        A handoff is one statement filed under the reserved kind `HANDOFF`. The
-        previous one is removed by that kind, so a handoff is a standing single
-        entry rather than a list of them, and the caller never has to remember
-        that an older one was there. The count of what it replaced is returned,
-        because a replaced statement is still data the caller may want to know it
-        lost.
+        A handoff is one statement filed under the bounded kind `HANDOFF`, so the
+        replacement is the kind's own behaviour rather than something this method
+        asks for, and a handoff is a standing single entry rather than a list of
+        them. The count of what it replaced is returned, because a replaced statement
+        is still data the caller may want to know it lost.
         """
 
-        return self.record(
-            directory=directory,
-            content=content,
-            kind=HANDOFF_KIND,
-            replace_kind=HANDOFF_KIND,
-        )
+        return self.record(directory=directory, content=content, kind=HANDOFF_KIND)
 
     def maintain(self, directory: Path) -> dict[str, Any]:
         """Bring the document in line with the record, and say whether it was stale.

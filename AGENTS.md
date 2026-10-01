@@ -4,8 +4,8 @@ Rules a change to this product has to be argued against: what the product is, wh
 
 ## What this project is
 
-- One process holds an account's global memory and every project's local memory, and serves three front ends from one loopback port: a browser workspace, an agent surface of four tools, and a command line.
-- The four tools are the whole of what an agent may do to a memory. Everything else belongs to the command center.
+- One process holds an account's global memory and every project's local memory, and serves three front ends from one loopback port: a browser workspace, an agent surface of one tool per kind, and a command line.
+- The tools are the whole of what an agent may do to a memory. Everything else belongs to the command center.
 - The engine is the memory server's own code, byte for byte, and the on-disk layout is frozen while that server is installed.
 - The change this product makes is to what a memory is for — a place a person manages, not only a place an agent writes — and not to what a memory is.
 
@@ -27,16 +27,29 @@ Rules a change to this product has to be argued against: what the product is, wh
 
 ### The contract a reader relies on
 
-- The four memory tools are the whole agent surface.
-  - A fifth tool is a feature this product does not own.
+- The tools are the whole agent surface.
+  - A tool that is not memory would be a feature this product does not own.
   - A tool that edits a record by hand is a second writer beside the one that maintains it.
+- Every kind has its own recording tool and its own recall tool, so the kind is named by the tool rather than passed to one.
+  - There is no `kind` argument and no default kind. A caller chooses a kind by choosing a tool, and a statement filed under a kind nothing interprets is a category a later recall cannot ask for.
+  - The tools are declared from `store.KINDS` in a loop rather than written out one by one, so a kind's summary and the tool offering it are one fact in one place.
+  - `tests/test_architecture.py` builds the server and asks it what it offers, rather than grepping the source, because a tool declared in a loop is invisible to a grep.
+  - Two tools sit beside the per-kind ones and are not kinds: `recall_memory` answers across every kind, because an agent asking about a subject does not know which kind filed it and should not have to guess; and `forget_memory` removes a statement by its exact text, because a statement that stopped being true is removed whatever kind filed it.
+- A kind decides its own behaviour, and that is the reason for the split.
+  - `PERSONALITY` and `PREFERENCE` take no scope argument: what is true of the user is true of them in every project, and filing it in one would be filing a statement that is wrong everywhere else.
+  - `HANDOFF` takes no scope argument and holds one statement, replacing the last, so a project holds a handoff rather than a list of them.
+  - Every other kind takes the caller's choice of memory.
+  - A tool that shows a choice and then makes it for the caller is a tool the caller has to learn the hard way, so a kind whose memory is fixed does not take the argument at all.
+- The set of kinds is closed on a write and open on a read.
+  - A word outside `store.KINDS` is refused by name, with the kinds named beside it.
+  - A read stays permissive, because a record may already hold a kind this set does not name — written by an earlier version, or by the product this one replaces — and a recall that refused to search it would make those statements unreadable rather than tidy.
+  - `store.DEFAULT_KIND` is `ITEM` and is not in the set: a document from an earlier version carries no kind at all, so importing one has to file its statements under something, and the frozen product's parser reads a kindless line as `ITEM`. It is reachable from an import and from nothing else.
 - A statement states what holds, and carries no date or time.
   - The record dates every statement in `added_at`, and a read reports that date, so a statement repeating it says the same thing twice.
   - `store.admission_failure` refuses one, and it judges the statement's own words, so the same text is admitted or refused every time rather than depending on what has been embedded.
   - A statement's identity is a digest of its words, and the date is the token that differs between two accounts of one event, so without this rule one approval recorded per session becomes one statement per session.
   - A year on its own is not a date, because naming the edition meant still holds next year.
-  - The refusal names `record_handoff`, because a statement about what was done is not a bad statement: it is a handoff, and `HANDOFF` is reserved so only `record_handoff` writes it.
-    - A handoff replaces the previous one, so an ordinary record filed under that kind would be removed by the next session's handoff without ever being read.
+  - The refusal names `record_memory_handoff`, because a statement about what was done is not a bad statement: it is a handoff, and `HANDOFF` is the kind that holds one.
 - Nothing is refused for being similar to what is already there.
   - A write does not wait for a vector, so judging it by meaning would judge the same statement differently depending on what had been embedded.
   - The repetition is resolved in the read, over the whole answer, where it collapses rather than refuses.
@@ -45,7 +58,7 @@ Rules a change to this product has to be argued against: what the product is, wh
 - A project's local memory lives inside its repository under `.memory-rag` and never leaves it. Nothing in this product copies a statement out of a project's directory.
 - The record is the record. `MEMORY.md` is a rendering, written from the record and never read back as memory.
   - A page that edits the rendering is refused, and told where to edit the record instead.
-- The four tools take no project argument.
+- The tools take no project argument.
   - The session that records a rule is working in one repository, and a statement filed into another is a statement that is wrong everywhere else.
 - An answer carries a field when the field has news, and nothing else.
 - A write is durable before derived, and never fails because the lookup layer is unavailable.
@@ -131,7 +144,7 @@ src/memory_rag/
   config.py     the account, a project's roots, and the settings layers
   surfaces/
     cli.py      the command centre
-    mcp.py      the four tools and the instructions
+    mcp.py      the per-kind tools and the instructions
     ui.py       the workspace profile, the adapter, and the SQL panel
   <engine>      index, store, vectors, read, retrieval, maintenance, models,
                 settings, instructions, reference

@@ -30,6 +30,21 @@ from .registry import RegisteredProject, RegistryError
 from .registry import load as load_projects
 from .retrieval import Retrieval, RetrievalSettings
 from .sql import SqlRefusal, drop_vectors, sql_execute, sql_query
+from .store import SCOPE_EITHER, Kind, StoreError, kind_named, statement_kind
+
+
+def _kind_of(kind: str) -> Kind:
+    """Return the kind a caller's word names, refusing it as a model error.
+
+    A kind outside the set is a refusal rather than a failure, and every other
+    service refusal is a :class:`ModelError`, so a caller that catches one thing
+    catches this too.
+    """
+
+    try:
+        return kind_named(statement_kind(kind))
+    except StoreError as error:
+        raise ModelError(str(error)) from error
 
 #: How long a caller waits for the account's writer before it is told the memory is
 #: busy. A write is a few milliseconds, so a wait this long means a writer is stuck
@@ -102,7 +117,7 @@ class MemoryService:
         ``global`` is the account's. Every project's local memory is addressed by that
         project's recorded name, so a caller writes ``local`` when the service is
         serving one project and the project's own name when it is serving several.
-        The project named is the active one, so the four tools keep the exact
+        The project named is the active one, so the tools keep the exact
         signatures they have always had and take no project argument.
         """
 
@@ -227,17 +242,26 @@ class MemoryService:
         self,
         content: str,
         *,
-        kind: str | None = None,
+        kind: str,
         scope: str = LOCAL_SCOPE,
     ) -> dict[str, Any]:
-        """Record one statement in one memory."""
+        """Record one statement in the memory its kind belongs in.
 
-        ref = self.scope(scope)
+        A kind that names its own memory wins over the argument. What is true of the
+        user is true of them in every project, so ``PERSONALITY`` and ``PREFERENCE``
+        are the account's memory whatever the caller passed; a handoff is this
+        project's own state, so ``HANDOFF`` is the project's. Every other kind takes
+        the caller's choice.
+        """
+
+        entry = _kind_of(kind)
+        chosen = scope if entry.scope == SCOPE_EITHER else entry.scope
+        ref = self.scope(chosen)
         return await asyncio.to_thread(
             self.retrieval.record,
             content=content,
             directory=ref.directory,
-            kind=kind,
+            kind=entry.name,
         )
 
     async def recall(
@@ -277,7 +301,8 @@ class MemoryService:
 
         A handoff is about this project's work, so it is never filed in the account's
         memory: a statement every project shares about what one repository is doing
-        is a statement that is wrong everywhere else.
+        is a statement that is wrong everywhere else. The kind carries that rule
+        itself, so this resolves the project and records under ``HANDOFF``.
         """
 
         project = self.active_project()

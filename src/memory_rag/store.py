@@ -38,13 +38,20 @@ __all__ = [
     "DEFAULT_KIND",
     "EXPORT_FILENAME",
     "HANDOFF_KIND",
+    "KINDS",
+    "Kind",
     "MAX_KIND_LENGTH",
+    "SCOPE_EITHER",
+    "SCOPE_GLOBAL",
+    "SCOPE_LOCAL",
     "SEED",
     "STOPWORDS",
     "TEMPLATE",
     "Statement",
     "StoreError",
     "admission_failure",
+    "kind_named",
+    "kind_names",
     "normalise",
     "parse_document",
     "query_terms",
@@ -69,10 +76,10 @@ TEMPLATE = "# MEMORY\ni am jack. i like LLMs.\n"
 #: a file written before this version has it.
 SEED = "i am jack. i like LLMs."
 
-#: What a statement is filed under when the caller names none. Every statement
-#: carries a type, so the default is a real one rather than an absence: a query
-#: naming `ITEM` finds the statements nobody else filed, which is the only way they
-#: can be found at all.
+#: What a statement is filed under when it is imported from a document that does not
+#: say. It is not a kind an agent may choose: a document written by an earlier version
+#: carries no kind at all, so importing one has to file its statements under something,
+#: and the frozen product's own parser reads a kindless line as ``ITEM``.
 DEFAULT_KIND = "ITEM"
 
 #: The type a session handoff is filed under. It is reserved: a handoff replaces
@@ -82,6 +89,135 @@ HANDOFF_KIND = "HANDOFF"
 
 #: Long enough for a word, short enough that a type cannot become a phrase.
 MAX_KIND_LENGTH = 64
+
+#: The scope a kind may be filed in: the caller's choice.
+SCOPE_EITHER = "either"
+
+#: The scope a kind is always filed in, because the statement is true of the account
+#: rather than of a repository. What is true of the user is true in every project, so
+#: filing it in one would be filing a statement that is wrong everywhere else.
+SCOPE_GLOBAL = "global"
+
+#: The scope a kind is always filed in, because the statement is about this project's
+#: own work and is not true of any other.
+SCOPE_LOCAL = "local"
+
+
+@dataclass(frozen=True, slots=True)
+class Kind:
+    """One kind of statement, and what filing under it means.
+
+    ``summary`` is what goes in the tool that records it, so the one sentence an agent
+    reads before choosing is written here beside the behaviour it chooses, and the two
+    cannot drift apart. ``scope`` is the memory the kind is filed in, and a kind that
+    is not ``SCOPE_EITHER`` takes no scope argument at all rather than being given one
+    it may contradict. ``replaces`` is a bounded lifetime: the kind holds one statement
+    and the next one of that kind removes it, which is what a handoff is.
+    """
+
+    name: str
+    summary: str
+    scope: str = SCOPE_EITHER
+    replaces: bool = False
+
+    @property
+    def tool(self) -> str:
+        """Return this kind as it appears in a tool name."""
+
+        return self.name.casefold()
+
+
+#: Every kind this product files a statement under, and the order they are offered in.
+#: The set is closed on the write path: a word that is not here is refused by name,
+#: because a kind nothing interprets is a category a later recall cannot ask for and
+#: a statement filed under one of them is found only by accident.
+#:
+#: A read stays permissive. A record may already hold a kind this set does not name,
+#: written by an earlier version or by the product this one replaces, and a recall
+#: that refused to search it would make those statements unreadable rather than tidy.
+KINDS: tuple[Kind, ...] = (
+    Kind(
+        "RULE",
+        "An instruction that was given, or a standing fact that holds. Call it when "
+        "the next request in three weeks would still be governed by what you write.",
+    ),
+    Kind(
+        "GUIDELINE",
+        "How to do something here: a convention, an order of preference, a way of "
+        "working. Softer than a rule, because a guideline is revised rather than "
+        "broken.",
+    ),
+    Kind(
+        "PERSONALITY",
+        "What is true of the user: how they think, what they care about, what they "
+        "are like.",
+        scope=SCOPE_GLOBAL,
+    ),
+    Kind(
+        "GENERAL",
+        "Anything meant to hold that is none of the other kinds. Choose it when the "
+        "statement is plainly durable and plainly not one of the rest.",
+    ),
+    Kind(
+        "DECISION",
+        "A decision that was made and why. The reasoning goes in as well as the "
+        "choice, because the reasoning is what a later session needs and the choice "
+        "alone does not say when it stops holding.",
+    ),
+    Kind(
+        "HANDOFF",
+        "This session's handoff: what is done, what is in flight, and what the "
+        "next session does first.",
+        scope=SCOPE_LOCAL,
+        replaces=True,
+    ),
+    Kind(
+        "CORRECTION",
+        "Something to stop doing. Record what was wrong rather than what is right now, "
+        "so a later session recognises the same mistake when it meets it again.",
+    ),
+    Kind(
+        "PREFERENCE",
+        "What the user likes or wants: a way of being spoken to, a form an answer "
+        "should take.",
+        scope=SCOPE_GLOBAL,
+    ),
+    Kind(
+        "PLAN",
+        "What the project is meant to be, or what it is achieving. A destination "
+        "rather than a task, and it survives the work that serves it.",
+    ),
+    Kind(
+        "LIMITS",
+        "A boundary: what must not be done here, and what is out of scope. Write the "
+        "boundary rather than the rule that replaces it.",
+    ),
+)
+
+_KINDS_BY_NAME: dict[str, Kind] = {kind.name: kind for kind in KINDS}
+
+
+def kind_names() -> tuple[str, ...]:
+    """Return every kind this product files a statement under, in its own order."""
+
+    return tuple(kind.name for kind in KINDS)
+
+
+def kind_named(name: str) -> Kind:
+    """Return the kind this word names, or refuse a word that names none.
+
+    The refusal names every kind rather than saying the word was unknown, because a
+    caller that cannot tell which words are accepted cannot choose one, and the set is
+    the whole of what there is to choose from.
+    """
+
+    entry = _KINDS_BY_NAME.get(str(name or "").strip().upper())
+    if entry is None:
+        raise StoreError(
+            f"{str(name or '').strip()!r} is not a kind this memory files under. "
+            f"The kinds are: {', '.join(kind_names())}."
+        )
+    return entry
 
 _HEADING_PATTERN = re.compile(r"^#\s+\S")
 
@@ -131,35 +267,36 @@ def unit_key(text: str) -> str:
 def statement_kind(value: str) -> str:
     """Return one statement's label as it is written on its row.
 
-    A type is the caller's own category for a statement, and it carries no meaning
-    here: the record holds it and never interprets it. It exists to help a read
-    find the statement, so it is one run of block letters and nothing else — no
-    white space, no punctuation, no digits. A single word is a category; a phrase
-    would put a sentence where a word belongs, and anything but letters would make
-    a query for it unwriteable.
+    A kind is one word in block letters, and this returns it in that shape: it is the
+    record's own spelling of a category, and a word in any other case is recorded in
+    block letters so what the record holds is always the shape the read side
+    recognises. Whether the word is one of them is a separate question, answered by
+    :func:`kind_named`, because this says how a word is written rather than whether
+    it is allowed.
 
-    Case is the one thing normalised rather than refused: a type given in any case
-    is recorded in block letters, so what the record holds is always the shape the
-    read side recognises. An empty type is not refused either: every statement
-    carries one, so a caller that names none gets `ITEM`.
+    An empty kind is refused rather than defaulted. Every statement carries a kind,
+    and with the set closed a caller that names none has named one that is not in it.
     """
 
     raw = str(value or "").strip()
     if not raw:
-        return DEFAULT_KIND
+        raise StoreError(
+            "kind must be named: every statement is filed under one, and the kinds "
+            f"are {', '.join(kind_names())}."
+        )
     if any(character.isspace() for character in raw):
         raise StoreError(
-            "type must be one word with no white space in it: a type is a single "
+            "kind must be one word with no white space in it: a kind is a single "
             "category, and a phrase would be part of the statement."
         )
     if not (raw.isascii() and raw.isalpha()):
         raise StoreError(
-            "type must be block letters only, as in RULE or PLAN: a type carries "
-            "no meaning beyond helping a read find its statements."
+            "kind must be block letters only, as in RULE or PLAN: a kind names a "
+            "category and carries no meaning beyond helping a read find its statements."
         )
     if len(raw) > MAX_KIND_LENGTH:
         raise StoreError(
-            f"type must be at most {MAX_KIND_LENGTH} characters: it named {len(raw)}."
+            f"kind must be at most {MAX_KIND_LENGTH} characters: it named {len(raw)}."
         )
     return raw.upper()
 
@@ -177,7 +314,8 @@ def admission_failure(text: str) -> str | None:
 
     The refusal names where the statement belongs rather than restating the rule,
     because a statement about what was done is not a bad statement. It is a handoff:
-    ``record_handoff`` holds exactly one and replaces it with the next session's, so
+    ``record_memory_handoff`` holds exactly one and replaces it with the next
+    session's, so
     progress can be recorded without becoming permanent history.
     """
 
@@ -191,7 +329,8 @@ def admission_failure(text: str) -> str | None:
         f"thing twice — and because a statement is known by a digest of its words, "
         f"the date is exactly what makes two accounts of one event two statements "
         f"instead of one. Leave the date out. If this is what was done in this "
-        f"session rather than what holds afterwards, record_handoff is the tool for "
+        f"session rather than what holds afterwards, record_memory_handoff is the "
+        f"tool for "
         f"it, and it holds one handoff and replaces it with the next."
     )
 

@@ -4,7 +4,7 @@ A command center for an account's global memory and every project's local memory
 
 - An agent's memory is usually only reachable by an agent. `memory-rag` makes the same records readable and editable by a person, and gives an agent no more power than it already had.
 - One process holds the account's global memory and the local memory of every registered project, and serves all of them at once.
-- An agent gets four tools, unchanged from the product this replaces: record, recall, forget, and a handoff. It cannot see the SQL panel, the project list, or the clients.
+- An agent gets one recording tool and one recall tool per kind, so what it is doing is named by the tool it calls, plus a recall that answers across every kind and a forget that removes a statement whatever kind filed it. It cannot see the SQL panel, the project list, or the clients.
 - A command line reaches everything the workspace does, against the same process.
 
 ## What it does
@@ -191,7 +191,8 @@ It reads only: it writes nothing, fetches no model, and starts no process, so it
 ## Limitations
 
 - A memory holds statements, not documents. There is no corpus, no ingestion, and no original file to open beside a statement.
-- A statement states what holds, and carries no date. The memory dates every statement itself and a recall reports that date, so `record_memory` refuses a statement that writes one out. Work finished in a session belongs in `record_handoff`, which holds one and replaces it with the next.
+- A statement states what holds, and carries no date. The memory dates every statement itself and a recall reports that date, so every recorder refuses a statement that writes one out. Work finished in a session belongs in `record_memory_handoff`, which holds one and replaces it with the next.
+- The set of kinds is closed. A word that is not one of the ten is refused with the list beside it, because a kind nothing interprets is a category a later recall cannot ask for. A read stays permissive, so statements an earlier version filed under a kind this set does not name are still found.
 - The standing document is a rendering. Editing it is refused, because the next read rewrites it from the record.
 - The SQL panel is for repairing and inspecting a memory by hand. The four tools remain the way a statement is normally recorded.
 - One app per account. A second process over the same account would hold its own copy of every memory, so the port claim refuses a second one.

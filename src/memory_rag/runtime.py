@@ -5,7 +5,7 @@ same way. The policy is the settings, the models are named by them, and the cach
 are fetched into is the one they name, so one ``config.toml`` decides what a memory is
 matched with and where its model already is on disk.
 
-The project a service treats as current is chosen by the caller, because the four tools
+The project a service treats as current is chosen by the caller, because the tools
 take no project argument: a statement is filed where the session that recorded it is
 working, and the choice of session is the caller's, made once when the app is built.
 """
@@ -44,7 +44,7 @@ def select_projects(
 ) -> list[RegisteredProject]:
     """Return the projects this process serves, in the order it should treat them.
 
-    The first entry is the active project, so the local scope the four tools file into
+    The first entry is the active project, so the local scope the tools file into
     is the one the caller named. Naming a project this installation has not recorded is
     refused here rather than at first use, because a session that files a rule about one
     repository into another one is worse than a session that does not start.

@@ -1,14 +1,24 @@
-"""The agent surface: the four memory tools, and nothing else.
+"""The agent surface: one tool per kind, and nothing else.
 
-These four verbs are the whole of what an agent may do to a memory. The command center
-holds everything else — the project list, the SQL console, the clients, the lifecycle —
-and an agent is given none of it, because a tool that is not memory would be a feature
-this product does not own and a tool that lets an agent edit the record by hand would be
-a second writer beside the one that maintains it.
+Each kind a statement can be filed under is its own recording tool and its own recall
+tool, so what an agent is doing is named by the tool it calls rather than by a word it
+passes. That buys two things. A kind that must behave differently behaves differently
+— ``PERSONALITY`` and ``PREFERENCE`` take no memory argument because what is true of
+the user is true of the user in every project, and ``HANDOFF`` holds one rather than a
+list — and an agent cannot file a statement under a kind nothing interprets, because
+there is no kind parameter to guess at.
 
-The tools are declared here and nowhere else. A surface that re-declared one of them
-would be a second place for it to be wrong, and the workspace and the command line
-would then be able to disagree with an agent about what a memory holds.
+The tools are declared here and nowhere else, and they are declared from
+:data:`memory_rag.store.KINDS` rather than written out one by one, so a kind's summary
+and the tool that offers it are one fact in one place. A surface that re-declared one
+of them would be a second place for it to be wrong, and the workspace and the command
+line would then be able to disagree with an agent about what a memory holds.
+
+Two tools sit beside the per-kind ones and are not kinds. ``recall_memory`` answers a
+question across every kind, because an agent asking what is remembered about a subject
+does not know which kind filed it and should not have to guess. ``forget_memory``
+removes a statement by its exact text, because a statement that is no longer true is
+removed whatever kind it was filed under.
 """
 
 from __future__ import annotations
@@ -25,7 +35,7 @@ from ..instructions import SERVER_INSTRUCTIONS
 from ..models import ModelError
 from ..registry import RegistryError
 from ..service import MemoryService
-from ..store import DEFAULT_KIND, StoreError
+from ..store import KINDS, SCOPE_EITHER, Kind, StoreError
 
 SERVER_NAME = "memory-rag"
 AGENT_BRIDGE_NAME = "memory-rag"
@@ -43,25 +53,10 @@ ContentParameter = Annotated[
     Field(
         description=(
             "The one statement to remember, in the user's own words where it is "
-            "theirs. A line or a short paragraph."
+            "theirs. A line or a short paragraph. It states what holds rather than "
+            "when it happened: the memory dates every statement itself, and a "
+            "statement carrying a date is refused."
         )
-    ),
-]
-KindParameter = Annotated[
-    str,
-    Field(
-        default=DEFAULT_KIND,
-        description=(
-            "The kind to file it under, chosen from what the statement means. "
-            "RULE for an instruction or a standing fact, PLAN for what the project "
-            "is meant to be or achieve, PREFERENCE for what the user likes, "
-            "CORRECTION for something to stop doing, and any other word in block "
-            "letters if the statement fits one better. The same word for the same "
-            "kind of thing, because a recall filtered by kind returns everything "
-            "filed under it. If nothing fits, ITEM: it is a kind like any other, "
-            "and a statement filed under it is found by asking for it. Nothing "
-            "here interprets the word."
-        ),
     ),
 ]
 ScopeParameter = Annotated[
@@ -89,16 +84,6 @@ ForgetParameter = Annotated[
         )
     ),
 ]
-HandoffParameter = Annotated[
-    str,
-    Field(
-        description=(
-            "This session's handoff, in a few sentences: what is done, what is in "
-            "flight, and what the next session does first. It replaces the previous "
-            "handoff in this project, which is a project's own state."
-        )
-    ),
-]
 QueryParameter = Annotated[
     str,
     Field(
@@ -107,17 +92,6 @@ QueryParameter = Annotated[
             "their words and by their meaning. Required: this server answers a "
             "question rather than returning a memory whole."
         )
-    ),
-]
-KindFilterParameter = Annotated[
-    str | None,
-    Field(
-        default=None,
-        description=(
-            "Return only the statements filed under this kind, one word in block "
-            "letters. A kind is a column of the record rather than part of a "
-            "statement's words, so it is asked for here rather than searched for."
-        ),
     ),
 ]
 LimitParameter = Annotated[
@@ -136,6 +110,21 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(
 WRITE_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
 )
+
+
+def agent_tool_names() -> tuple[str, ...]:
+    """Return every tool the agent surface offers, in the order it offers them.
+
+    Exposed so a test can pin the surface against the registry rather than against a
+    list written out twice, which is the thing this module exists to avoid.
+    """
+
+    return (
+        *(f"record_memory_{kind.tool}" for kind in KINDS),
+        "recall_memory",
+        *(f"recall_memory_{kind.tool}" for kind in KINDS),
+        "forget_memory",
+    )
 
 
 def create_mcp(
@@ -157,88 +146,157 @@ def create_mcp(
         instructions=SERVER_INSTRUCTIONS,
     )
 
-    @server.tool(name="record_memory", annotations=WRITE_ANNOTATIONS)
-    async def record_memory(
-        content: ContentParameter,
-        kind: KindParameter = DEFAULT_KIND,
-        scope: ScopeParameter = "local",
-    ) -> dict[str, Any]:
-        """Records one statement in this account's or this project's memory.
+    for kind in KINDS:
+        _declare_recorder(server, service, kind)
+    for kind in KINDS:
+        _declare_recall(server, service, kind)
+    _declare_recall_any(server, service, app_state)
+    _declare_forget(server, service)
+    return server
 
-        Call it for something meant to hold beyond this reply: a rule, a principle, a
-        decision, a correction, a preference, a path. Not for a request that is
-        finished when it is answered.
 
-        Recall first, with words covering the same thing. If a statement comes back
-        that says the same, record nothing. If one comes back that contradicts it,
-        forget that one first.
+# -- the tools, one declaration each -----------------------------------------
 
-        `scope` decides where it goes. "local" is this project, inside the
-        repository. "global" is across projects, in the account's memory. Choose it
-        from what the user means and how far it reaches — a fact about this code, a
-        path, a convention here is local; a preference about how they want to be
-        spoken to, or a rule about their own work rather than this repository, is
-        global. Prompts rarely say so, so judge the substance and not the wording.
-        """
 
-        return await _guarded(service.record(content, kind=kind, scope=scope))
+def _declare_recorder(server: FastMCP[Any], service: MemoryService, kind: Kind) -> None:
+    """Add the tool that records one statement under one kind.
 
-    @server.tool(name="recall_memory", annotations=READ_ONLY_ANNOTATIONS)
+    A kind whose memory is not the caller's to choose takes no memory argument, rather
+    than taking one and ignoring it: a tool that shows a choice and then makes it is a
+    tool the caller has to learn the hard way.
+    """
+
+    takes_scope = kind.scope == SCOPE_EITHER
+    summary = kind.summary
+    if takes_scope:
+        summary += (
+            "\n\nChoose the memory with `scope`: \"local\" is this project and "
+            "\"global\" is the account's, shared by every project on this machine."
+        )
+    else:
+        summary += (
+            f"\n\nIt takes no memory argument: a {kind.name} statement always goes "
+            f"in the {kind.scope} memory."
+        )
+
+    if takes_scope:
+
+        async def record(
+            content: ContentParameter,
+            scope: ScopeParameter = "local",
+        ) -> dict[str, Any]:
+            return await _guarded(
+                service.record(content, kind=kind.name, scope=scope)
+            )
+
+    else:
+
+        async def record(content: ContentParameter) -> dict[str, Any]:
+            return await _guarded(service.record(content, kind=kind.name))
+
+    record.__doc__ = summary
+    record.__name__ = f"record_memory_{kind.tool}"
+    server.tool(
+        name=record.__name__,
+        annotations=WRITE_ANNOTATIONS,
+        description=summary,
+    )(record)
+
+
+def _declare_recall(server: FastMCP[Any], service: MemoryService, kind: Kind) -> None:
+    """Add the tool that recalls from one kind."""
+
+    async def recall(query: QueryParameter, limit: LimitParameter = DEFAULT_RESULT_LIMIT):
+        return await _guarded(service.recall(query, kind=kind.name, limit=limit))
+
+    summary = (
+        f"Returns what is remembered under {kind.name} that matches these words.\n\n"
+        f"{kind.summary}\n\n"
+        "Give it a few words, not a sentence. When nothing comes back, that is what "
+        "the search found."
+    )
+    recall.__doc__ = summary
+    recall.__name__ = f"recall_memory_{kind.tool}"
+    server.tool(
+        name=recall.__name__,
+        annotations=READ_ONLY_ANNOTATIONS,
+        description=summary,
+    )(recall)
+
+
+def _declare_recall_any(
+    server: FastMCP[Any],
+    service: MemoryService,
+    app_state: Callable[[], dict[str, Any]] | None,
+) -> None:
+    """Add the tool that answers a question across every kind."""
+
     async def recall_memory(
-        query: QueryParameter,
-        kind: KindFilterParameter = None,
-        limit: LimitParameter = DEFAULT_RESULT_LIMIT,
+        query: QueryParameter, limit: LimitParameter = DEFAULT_RESULT_LIMIT
     ) -> dict[str, Any]:
-        """Returns what is remembered that matches these words.
-
-        It searches every memory this installation serves — this project's and the
-        account's — and ranks the results by how well they match, so the best
-        statement wins whichever memory it is in. Each one names its scope.
-
-        Give it a few words, not a sentence. When nothing comes back, that is what the
-        search found: try other words, or pass a kind.
-        """
-
-        answer = await _guarded(service.recall(query, kind=kind, limit=limit))
+        answer = await _guarded(service.recall(query, limit=limit))
         # Where the app is, which memories it serves, and how many agents are attached
         # to this same process are facts about the installation rather than about a
         # memory, and no question can make a recall return them. They ride on the one
-        # answer an agent always asks for rather than on a fifth tool it would have to
-        # decide to call.
-        answer["app"] = {**service.describe(), **(app_state() if app_state else {})}
-        return answer
+        # answer an agent always asks for rather than on a tool of its own.
+        return {**answer, "app": _app_state(service, app_state)}
 
-    @server.tool(name="forget_memory", annotations=WRITE_ANNOTATIONS)
+    summary = (
+        "Returns what is remembered that matches these words, in every kind at once.\n\n"
+        "It searches every memory this installation serves — this project's and the "
+        "account's — and ranks the results by how well they match, so the best "
+        "statement wins whichever memory and whichever kind it is in. Each one names "
+        "its scope and its kind.\n\n"
+        "Reach for a `recall_memory_<kind>` tool when you know which kind you want; "
+        "reach for this one when you are asking about a subject rather than a "
+        "category.\n\n"
+        "Give it a few words, not a sentence. When nothing comes back, that is what "
+        "the search found: try other words."
+    )
+    server.tool(
+        name="recall_memory",
+        annotations=READ_ONLY_ANNOTATIONS,
+        description=summary,
+    )(recall_memory)
+
+
+def _declare_forget(server: FastMCP[Any], service: MemoryService) -> None:
+    """Add the tool that removes one statement."""
+
     async def forget_memory(
         text: ForgetParameter, scope: ScopeParameter | None = None
     ) -> dict[str, Any]:
-        """Removes one statement that is no longer true.
-
-        Pass the exact `text` a recall returned. It matches words and never meaning,
-        so it removes that statement or nothing: if the text matches more than one,
-        nothing is removed and the answer names them.
-
-        Use it when a recalled statement is contradicted, and when a statement has
-        simply stopped being true.
-        """
-
         return await _guarded(service.forget(text, scope=scope))
 
-    @server.tool(name="record_handoff", annotations=WRITE_ANNOTATIONS)
-    async def record_handoff(content: HandoffParameter) -> dict[str, Any]:
-        """Records this session's handoff for the next one, replacing the last.
+    server.tool(
+        name="forget_memory",
+        annotations=WRITE_ANNOTATIONS,
+        description=(
+            "Removes one statement that is no longer true.\n\n"
+            "Pass the exact `text` a recall returned. It matches words and never "
+            "meaning, so it removes that statement or nothing: if the text matches "
+            "more than one, nothing is removed and the answer names them.\n\n"
+            "It takes the text and not a kind, because a statement that has stopped "
+            "being true is removed whatever kind it was filed under."
+        ),
+    )(forget_memory)
 
-        One statement at the top of this project's memory. The previous handoff is
-        removed as part of the same call, so a project holds one handoff rather than a
-        list of them, and `replaced` says how many went.
 
-        Write what the next session needs to pick the work up: what is done, what is
-        in flight, and what to do first.
-        """
+def _app_state(
+    service: MemoryService,
+    app_state: Callable[[], dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Return the installation facts a recall answer carries."""
 
-        return await _guarded(service.handoff(content))
+    return {**service.describe(), **(app_state() if app_state else {})}
 
-    return server
+
+def _with_app(
+    answer: dict[str, Any],
+    service: MemoryService,
+    app_state: Callable[[], dict[str, Any]] | None,
+) -> dict[str, Any]:
+    return answer
 
 
 async def _guarded(awaitable: Any) -> dict[str, Any]:
@@ -268,5 +326,6 @@ __all__ = [
     "MAX_RESULT_LIMIT",
     "MCP_PATH",
     "SERVER_NAME",
+    "agent_tool_names",
     "create_mcp",
 ]

@@ -76,7 +76,7 @@ def test_the_refusal_names_where_the_statement_belongs() -> None:
     """A refusal a caller cannot act on is a refusal that stalls the caller."""
 
     failure = admission_failure(NARRATED) or ""
-    assert "record_handoff" in failure
+    assert "record_memory_handoff" in failure
     assert "dates every statement itself" in failure
 
 
@@ -90,7 +90,7 @@ async def test_recording_a_dated_statement_is_refused(service: MemoryService) ->
 
     with pytest.raises(ModelError) as raised:
         await service.record(NARRATED, kind="DECISION", scope="local")
-    assert "record_handoff" in str(raised.value)
+    assert "record_memory_handoff" in str(raised.value)
 
     answer = await service.recall("critical-minimum revision", limit=10)
     assert answer["units"] == []
@@ -107,28 +107,68 @@ async def test_recording_what_holds_still_works(service: MemoryService) -> None:
 # -- the reserved kind ------------------------------------------------------
 
 
-async def test_the_handoff_kind_is_reserved_for_the_handoff_tool(
+async def test_a_kind_is_replaced_by_the_next_one_of_that_kind(
     service: MemoryService,
 ) -> None:
-    """A handoff replaces the previous one, so an ordinary record under it would vanish."""
+    """HANDOFF's lifetime is the kind's own rule, so nothing has to ask for it."""
+
+    first = await service.record("Done and pushed.", kind="HANDOFF", scope="global")
+    second = await service.record("Done, and reindexed.", kind="HANDOFF")
+
+    assert first["kind"] == "HANDOFF"
+    assert second["replaced"] == 1
+    answer = await service.recall("reindexed", limit=10)
+    assert [unit["text"] for unit in answer["units"]] == ["Done, and reindexed."]
+
+
+async def test_a_kind_that_names_its_memory_wins_over_the_argument(
+    service: MemoryService,
+) -> None:
+    """What is true of the user is true of them in every project."""
+
+    recorded = await service.record(
+        "The user reads a proposal before answering it.",
+        kind="PERSONALITY",
+        scope="local",
+    )
+    assert recorded["kind"] == "PERSONALITY"
+
+    answer = await service.recall("proposal", limit=10)
+    assert [unit["scope"] for unit in answer["units"]] == ["global"]
+
+
+async def test_an_unfiltered_recall_still_searches_every_kind(
+    service: MemoryService,
+) -> None:
+    """Per-kind tools must not make a subject question impossible to ask."""
+
+    # The two statements share "branch" so the word side finds both, and carry the
+    # fake embedder's own markers so it gives them different meanings — otherwise
+    # they land on one vector and the duplicate check collapses them, which is the
+    # rule working rather than the rule failing.
+    await service.record("Rebase a manuscript branch before merging it.", kind="RULE")
+    await service.record("Never force-push a tea branch.", kind="LIMITS")
+
+    by_kind = await service.recall("force-push", kind="LIMITS", limit=10)
+    assert [unit["kind"] for unit in by_kind["units"]] == ["LIMITS"]
+
+    across = await service.recall("branch", limit=10)
+    assert {unit["kind"] for unit in across["units"]} == {"RULE", "LIMITS"}
+
+
+async def test_a_kind_outside_the_set_is_refused_by_name(
+    service: MemoryService,
+) -> None:
+    """A kind nothing interprets is a category a later recall cannot ask for."""
 
     from memory_rag.models import ModelError
 
     with pytest.raises(ModelError) as raised:
-        await service.record("A rule.", kind="HANDOFF", scope="local")
-    assert "record_handoff" in str(raised.value)
-
-
-async def test_a_handoff_still_replaces_the_one_before_it(service: MemoryService) -> None:
-    """The reservation must not stop the one path that is meant to write that kind."""
-
-    first = await service.handoff("Done and pushed.")
-    second = await service.handoff("Done, and reindexed.")
-
-    assert second["replaced"] == 1
-    assert first["text"] == "Done and pushed."
-    answer = await service.recall("reindexed", limit=10)
-    assert [unit["text"] for unit in answer["units"]] == ["Done, and reindexed."]
+        await service.record("A statement.", kind="WHATEVER")
+    assert "WHATEVER" in str(raised.value)
+    assert "not a kind" in str(raised.value)
+    assert "RULE" in str(raised.value)
+    assert "LIMITS" in str(raised.value)
 
 
 # -- the vectors a rewording leaves behind ----------------------------------

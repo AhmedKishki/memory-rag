@@ -60,11 +60,31 @@ ENGINE_MODULES = {
     "vectors",
 }
 
-#: The four memory tools, by name. The agent surface is exactly these, and a test
-#: fails when a fifth appears: a tool that is not memory would be a feature this
-#: product does not own, and a tool that edits a record by hand would be a second
-#: writer beside the one that maintains it.
-AGENT_TOOLS = {"record_memory", "recall_memory", "forget_memory", "record_handoff"}
+#: The agent surface, by name. Every kind has a recorder and a recaller, and two tools
+#: sit beside them that are not kinds: a recall that answers across every kind, and a
+#: forget that removes a statement whatever kind filed it. The test below compares this
+#: against the server the product actually builds, so a tool cannot be added without
+#: being written here, and cannot be dropped without this failing.
+AGENT_TOOLS = {
+    "recall_memory",
+    "forget_memory",
+    *(
+        f"{verb}_memory_{kind}"
+        for verb in ("record", "recall")
+        for kind in (
+            "rule",
+            "guideline",
+            "personality",
+            "general",
+            "decision",
+            "handoff",
+            "correction",
+            "preference",
+            "plan",
+            "limits",
+        )
+    ),
+}
 
 
 def _module_path(module: str) -> Path:
@@ -159,24 +179,42 @@ def test_only_the_agent_surface_declares_a_tool() -> None:
     declaring = [
         path.relative_to(SOURCE).as_posix()
         for path in SOURCE.rglob("*.py")
-        if "@server.tool(" in path.read_text(encoding="utf-8")
+        if "server.tool(" in path.read_text(encoding="utf-8")
     ]
     assert declaring == ["surfaces/mcp.py"], (
         f"tools are declared in {declaring}; they belong in surfaces/mcp.py alone."
     )
 
 
-def test_the_agent_surface_declares_exactly_the_four_memory_tools() -> None:
-    text = _module_path("surfaces/mcp").read_text(encoding="utf-8")
-    declared = {
-        line.split('"')[1]
-        for line in text.splitlines()
-        if line.strip().startswith("@server.tool(name=")
-    }
+async def test_the_agent_surface_declares_exactly_the_memory_tools(service) -> None:
+    """The surface is one tool per kind, and the test reads the server rather than the source.
+
+    Grepping for a decorator would miss a tool declared in a loop, which is how these
+    are declared, so this builds the server and asks it what it offers. A kind added to
+    the registry without being written above fails here.
+    """
+
+    from memory_rag.surfaces.mcp import create_mcp
+
+    server = create_mcp(service)
+    declared = {tool.name for tool in await server.list_tools()}
     assert declared == AGENT_TOOLS, (
-        f"the agent surface declares {sorted(declared)}; it is exactly the four memory "
-        "tools. Everything else belongs to the command center."
+        f"the agent surface offers {sorted(declared - AGENT_TOOLS)} unexpectedly and "
+        f"is missing {sorted(AGENT_TOOLS - declared)}. Everything else belongs to the "
+        "command center."
     )
+
+
+async def test_every_kind_has_a_recorder_and_a_recaller(service) -> None:
+    """The registry is the surface's source, so a kind and a tool cannot come apart."""
+
+    from memory_rag.store import KINDS
+    from memory_rag.surfaces.mcp import agent_tool_names
+
+    names = set(agent_tool_names())
+    for kind in KINDS:
+        assert f"record_memory_{kind.tool}" in names, kind.name
+        assert f"recall_memory_{kind.tool}" in names, kind.name
 
 
 def test_the_entry_point_runs_the_command_line() -> None:

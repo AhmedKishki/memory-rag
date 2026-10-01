@@ -37,7 +37,7 @@ from ..launcher import (
     state_root,
     stop_app,
 )
-from ..models import describe_environment
+from ..models import ModelError, describe_environment
 from ..registry import RegistryError, register
 from ..registry import load as load_projects
 from ..runtime import build_service
@@ -131,8 +131,9 @@ a hand edit cannot leave a memory whose words and whose meaning disagree.
 `memory.sqlite3` is the record, not a cache. Deleting it costs every statement in it.
 """,
     "agents": """\
-An agent gets four tools, and they are the whole of what an agent may do to a memory:
-record_memory, recall_memory, forget_memory, and record_handoff. Everything else
+An agent gets one tool per kind, and they are the whole of what an agent may do to a memory:
+record_memory_<kind> and recall_memory_<kind> for each of the ten kinds, plus a
+recall_memory across all of them and a forget_memory. Everything else
 belongs to the command center.
 
 A client that speaks streamable HTTP reaches the app at `<app>/mcp`. A client that
@@ -1290,11 +1291,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     except (
         ConfigurationError,
         ControlError,
+        ModelError,
         RegistryError,
         SqlRefusal,
         OSError,
         ValueError,
     ) as error:
+        # A refusal is an answer, not a crash. Every service refusal is a ModelError,
+        # and one of them reaching the terminal as a traceback tells an operator that
+        # the command line is broken rather than that their statement was refused and
+        # what to do about it.
         print(f"{CLI_NAME}: {error}", file=sys.stderr)
         raise SystemExit(2) from None
     if result.payload is not None and getattr(arguments, "json", False):

@@ -22,7 +22,7 @@
 # statements are embedded again rather than mixed with another's space. `AGENTS.md`
 # records the constants that deliberately stay in code: the schema version, the
 # file names that make up a scope, and the kinds a statement may be filed under
-# being a word rather than a closed list.
+# being a closed list, named in store.KINDS and enforced on every write.
 
 [runtime]
 # Shared FastEmbed model cache; empty means this application's own per-user cache.
