@@ -1,10 +1,10 @@
 # STORAGE
 
-The on-disk format. This is the only document that defines a field name.
+The on-disk format: every directory, file, column, and field name. The only document that defines a field name.
 
-The on-disk contract is frozen for as long as the product this one replaces is
-installed, because that product reads and writes the same files. Adding to it is
-additive; renaming a path or a column is not available.
+- The format is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because that product reads and writes the same files.
+  - Adding to it is additive; renaming a path or a column is not available.
+  - `AGENTS.md` states the rule and `tests/test_compatibility.py` pins the values.
 
 ## The two memories
 
@@ -15,9 +15,8 @@ additive; renaming a path or a column is not available.
 | Travels with | the account | the repository |
 | User dimension | none | none |
 
-There is one global memory, not one per user, and the directory is named as the upstream
-layout names it so a reader that expects that layout finds it unaltered. No tool, page,
-or argument carries a user identifier.
+- The directory is named as the upstream layout names it, so a reader that expects that layout finds it unaltered.
+- No tool, page, or argument carries a user identifier.
 
 ## Where the roots come from
 
@@ -29,9 +28,7 @@ or argument carries a user identifier.
 | model cache | `runtime.model_cache_root`, then `$MEMORY_ULTRARAG_MODEL_CACHE_ROOT` | `platformdirs.user_cache_path("memory-ultra-rag-mcp")/models` |
 | project record | — | `platformdirs.user_config_path("memory-ultra-rag-mcp")/projects.json` |
 
-The settings directory, the environment prefix, the model cache, and the scope
-directory names all keep the names the frozen product uses. Renaming any of them
-strands every existing memory and forces a silent model re-download.
+The settings directory, the environment prefix, the model cache, and the scope directory names keep the names the frozen product looks up. `AGENTS.md` says why each one is load-bearing.
 
 ## A project's directory
 
@@ -46,13 +43,10 @@ strands every existing memory and forces a silent model re-download.
     └── memory.sqlite3-wal, -shm
 ```
 
-`open-memory-rag-ui.sh` is a symlink, is machine-local, and holds nothing of yours. It
-is the only file this product writes at a project's root, and it is named so it carries
-the product's own name: two products serving one repository must not be able to stop
-each other.
-
-`project.json` is additive. The frozen product reads nothing from this directory but
-`memory.sqlite3`, so a field added here is invisible to it.
+- `open-memory-rag-ui.sh` is a symlink, is machine-local, and holds nothing of yours.
+  - It is the only file this product writes at a project's root.
+  - It carries the product's own name, so two products serving one repository cannot stop each other.
+- `project.json` is additive, and the frozen product reads nothing from this directory but `memory.sqlite3`, so a field added here is invisible to it.
 
 ```json
 {
@@ -65,12 +59,11 @@ each other.
 }
 ```
 
-`project_id` is derived from the project's resolved path, so the same project
-initialised on two machines gets the same id on both.
+- `project_id` is derived from the project's resolved path, so the same project initialised on two machines gets the same id on both.
 
 ## The project record
 
-`projects.json`, beside the account's settings. A pointer, never a state cache.
+`projects.json`, beside the account's settings.
 
 ```json
 {
@@ -86,12 +79,10 @@ initialised on two machines gets the same id on both.
 }
 ```
 
-It holds an id, a name, and a root, and nothing a memory owns. Unregistering a project
-is deleting its entry; nothing has to be rebuilt. A record whose project directory has
-gone is still answerable, and `projects` reports it as having no descriptor.
-
-Writes are atomic: a temporary file beside it, then a rename, so a reader never sees
-half a record.
+- It holds an id, a name, and a root, and nothing a memory owns.
+  - Deleting an entry is how a project is unregistered, and nothing has to be rebuilt.
+- A record whose project directory has gone is still answerable, and `projects` reports it as having no descriptor.
+- Writes are atomic: a temporary file beside it, then a rename, so a reader never sees half a record.
 
 ## The app's own state
 
@@ -105,23 +96,20 @@ half a record.
 └── logs/
 ```
 
-Every name carries `memory-rag`, so this product's runtime and another product's cannot
-be confused for one another.
+Every name carries `memory-rag`, so this product's runtime and another product's cannot be confused for one another.
 
-The launcher is a generated POSIX script that owns the free-port choice, the lock
-making that choice exclusive, the pid and port files, and the log. Its first line names
-the version that wrote it, so a template change rewrites it rather than leaving an older
-command in place.
-
-A recorded pid is believed only when the process it names still identifies itself as
-this app's own: a pid file outlives its process and the number is reused, so a start
-that trusted the number would refuse to start, and a stop that trusted it would signal
-whatever the machine ran next.
+- The launcher is a generated POSIX script that owns:
+  - the free-port choice,
+  - the lock making that choice exclusive,
+  - the pid and port files,
+  - the log.
+  - Its first line names the version that wrote it, so a template change rewrites it rather than leaving an older command in place.
+- A recorded pid is believed only when the process it names still identifies itself as this app's own.
+  - A pid file outlives its process and the number is reused, so a start that trusted the number would refuse to start, and a stop that trusted it would signal whatever the machine ran next.
 
 ## The record
 
-`memory.sqlite3`, one per memory. It is the record, not a derived cache, and the
-following is all of it.
+`memory.sqlite3`, one per memory. It is the record, not a derived cache, and the following is all of it.
 
 ```sql
 CREATE VIRTUAL TABLE unit USING fts5(
@@ -147,11 +135,6 @@ CREATE TABLE vector(
 
 `schema_version` is currently `8`, recorded in `meta`.
 
-`unit` is an FTS5 virtual table, so the words that find a statement and the statement
-itself are the same rows. A hand edit to `unit.text` cannot put the word index out of
-step with the record; the one thing it can leave behind is a `vector` describing text
-the statement no longer holds.
-
 Every column earns its place by naming its reader:
 
 | Column | Read by |
@@ -163,25 +146,25 @@ Every column earns its place by naming its reader:
 | `added_at` | the recency bonus, and the date a caller is told |
 | `recalls` | how often the memory has handed the statement back, which a caller judges by |
 
-`index.sqlite3` and `index-vectors.sqlite3` are older files. They are read once, for
-what they hold, and then removed; the answer says how many were found.
+- `unit` is an FTS5 virtual table, so the words that find a statement and the statement itself are the same rows, and a hand edit to `unit.text` cannot put the word index out of step with the record.
+  - The one thing an edit can leave behind is a `vector` describing text the statement no longer holds.
+- `index.sqlite3` and `index-vectors.sqlite3` are older files.
+  - They are read once, for what they hold, and then removed, and the answer says how many were found.
 
 ## The standing document
 
-`MEMORY.md`, written from the record and never read back as memory. Newest statement
-at the top, each carrying its kind and its date.
+`MEMORY.md`, written from the record and never read back as memory.
 
-A file beside the record is read exactly once, and only ever read: a record with nothing
-in it adopts a document left by an earlier version, which is how such a memory is
-recovered, and anything the document still holds that the record lacks is imported and
-then removed.
+- Newest statement at the top, each carrying its kind and its date.
+- Prose under a heading, with no kind in each line, because that is what the frozen product's parser reads.
+- A file beside the record is read exactly once, and only ever read:
+  - a record with nothing in it adopts a document left by an earlier version, which is how such a memory is recovered,
+  - anything the document still holds that the record lacks is imported and then removed.
 
 ## Durability
 
-A write reaches the `unit` table and is committed before anything derived from it is
-touched, and never fails because the lookup layer is unavailable. The rendering and the
-vectors follow the record, never the other way round.
-
-A statement with no vector is pending, not lost. A read says so, and the worker
-embeds it when a model is available; a missing model costs one retry per interval
-rather than a core, and the next write or an explicit `reindex` clears the wait.
+- A write reaches the `unit` table and is committed before anything derived from it is touched, and never fails because the lookup layer is unavailable.
+  - The rendering and the vectors follow the record, never the other way round.
+- A statement with no vector is pending, not lost.
+  - A read says so, and the worker embeds it when a model is available.
+  - A missing model costs one retry per interval rather than a core, and the next write or an explicit `reindex` clears the wait.
