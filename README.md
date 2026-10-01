@@ -191,6 +191,7 @@ It reads only: it writes nothing, fetches no model, and starts no process, so it
 ## Limitations
 
 - A memory holds statements, not documents. There is no corpus, no ingestion, and no original file to open beside a statement.
+- A statement states what holds, and carries no date. The memory dates every statement itself and a recall reports that date, so `record_memory` refuses a statement that writes one out. Work finished in a session belongs in `record_handoff`, which holds one and replaces it with the next.
 - The standing document is a rendering. Editing it is refused, because the next read rewrites it from the record.
 - The SQL panel is for repairing and inspecting a memory by hand. The four tools remain the way a statement is normally recorded.
 - One app per account. A second process over the same account would hold its own copy of every memory, so the port claim refuses a second one.

@@ -30,6 +30,16 @@ Rules a change to this product has to be argued against: what the product is, wh
 - The four memory tools are the whole agent surface.
   - A fifth tool is a feature this product does not own.
   - A tool that edits a record by hand is a second writer beside the one that maintains it.
+- A statement states what holds, and carries no date or time.
+  - The record dates every statement in `added_at`, and a read reports that date, so a statement repeating it says the same thing twice.
+  - `store.admission_failure` refuses one, and it judges the statement's own words, so the same text is admitted or refused every time rather than depending on what has been embedded.
+  - A statement's identity is a digest of its words, and the date is the token that differs between two accounts of one event, so without this rule one approval recorded per session becomes one statement per session.
+  - A year on its own is not a date, because naming the edition meant still holds next year.
+  - The refusal names `record_handoff`, because a statement about what was done is not a bad statement: it is a handoff, and `HANDOFF` is reserved so only `record_handoff` writes it.
+    - A handoff replaces the previous one, so an ordinary record filed under that kind would be removed by the next session's handoff without ever being read.
+- Nothing is refused for being similar to what is already there.
+  - A write does not wait for a vector, so judging it by meaning would judge the same statement differently depending on what had been embedded.
+  - The repetition is resolved in the read, over the whole answer, where it collapses rather than refuses.
 - The account's global memory and each project's local memory are the only two kinds.
   - Global memory is one per account and has no user dimension: no tool, page, or argument takes a user identifier.
 - A project's local memory lives inside its repository under `.memory-rag` and never leaves it. Nothing in this product copies a statement out of a project's directory.
@@ -41,6 +51,10 @@ Rules a change to this product has to be argued against: what the product is, wh
 - A write is durable before derived, and never fails because the lookup layer is unavailable.
   - A missing model leaves statements pending rather than lost, the read says so, and the worker embeds them when a model is available.
   - A missing model costs one retry per interval rather than a core, and the next write or an explicit `reindex` clears the wait.
+- A write drops the vectors of statements the record no longer holds, and says how many.
+  - A statement is known by a digest of its words, so a reworded statement is a new identity and the vector of the old one describes text that is gone.
+  - A live memory held 35 vectors for 23 statements, because only `forget` and `replace_all` collected them and an ordinary write did not.
+  - `MemoryIndex.collect_vectors` runs inside the connection the write already holds, so it is a set difference over keys rather than a second open.
 - Reranking is not optional and no setting turns it off.
 - The semantic side is unmeasured. No document may claim a quality gain from it.
 

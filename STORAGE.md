@@ -151,8 +151,8 @@ Every column earns its place by naming its reader:
 
 `MEMORY.md`, written from the record and never read back as memory.
 
-- The statement is newest at the top, and each one carries its kind and its date.
-- The document is prose under a heading, with no kind in each line, because that is what the frozen product's parser reads.
+- The statement is newest at the top.
+- The document is prose under a heading, with no kind and no date in each line, because that is what the frozen product's parser reads. Both are columns of the row, and a file that carried them in its text would be a file of data rather than something a person wrote.
 - A file beside the record is read exactly once, and only ever read.
   - A record with nothing in it adopts a document left by an earlier version, which is how such a memory is recovered.
   - Anything the document still holds that the record lacks is imported and then removed.
@@ -164,3 +164,7 @@ Every column earns its place by naming its reader:
 - A statement with no vector is pending, not lost.
   - A read says so, and the worker embeds it when a model is available.
   - A missing model costs one retry per interval rather than a core, and the next write or an explicit `reindex` clears the wait.
+- A write drops the vectors of statements the record no longer holds, and answers with the count as `vectors_removed`.
+  - A statement is known by a digest of its words, so a reworded statement is a new `unit_key` and the vector filed under the old one describes text that is gone.
+  - The drop is a set difference over `unit_key` taken inside the connection the write already holds, so it costs no second open of the file.
+  - A vector is never the record, and losing one costs a re-embedding rather than a statement.

@@ -49,14 +49,16 @@ rrf_k = 60
 # half of it, and so on. Zero turns the preference off, which is what a memory that
 # must be reproducible from its own scores wants.
 recency_bonus = 0.1
-# How alike two statements may be before the second one is refused as a
-# repetition of the first. Recording a statement that already means what the memory
-# says is how a memory fills with two answers to one question, and at 0.99 the two
-# differ by wording rather than by meaning. The check is against the memory being
-# written, not the account's, so a project may restate a rule it inherits. A value
-# above 1 is unreachable for a cosine and so turns the check off; 1.0 itself refuses
-# only a statement that is the same sentence twice.
-duplicate_cosine = 0.99
+# How alike two statements may be before a read keeps only the better of them.
+# Recording a statement that already means what the memory says is how a memory
+# fills with two answers to one question, and the check is against the memory being
+# written, not the account's, so a project may restate a rule it inherits. Measured
+# over every pair in a live memory of 23 statements: 0.99 caught none of the 253
+# pairs, and 0.85 caught the five that restate one fact in other words, while the
+# distinctly-worded pairs stayed below it. A value above 1 is unreachable for a
+# cosine and so turns the check off; 1.0 itself refuses only a statement that is
+# the same sentence twice.
+duplicate_cosine = 0.85
 # How many candidates each side contributes before fusion, and how many of the
 # fused candidates the cross-encoder reads. These are internal depths rather than
 # the answer: a read returns exactly the `limit` the caller asked for, and

@@ -29,7 +29,13 @@ from .index import MemoryIndex
 from .maintenance import EmbeddingWorker, embed_pending, warm_models
 from .models import DEFAULT_EMBEDDING_MODEL, Embedder, ModelError, Reranker
 from .read import Answer, answer_read, merge_answers
-from .store import HANDOFF_KIND, Statement, StoreError, statement_kind
+from .store import (
+    HANDOFF_KIND,
+    Statement,
+    StoreError,
+    admission_failure,
+    statement_kind,
+)
 from .vectors import VectorStore
 
 if TYPE_CHECKING:
@@ -76,7 +82,15 @@ class RetrievalSettings:
     #: are the same words are one statement whatever it says, and a number no
     #: cosine can reach decides that nothing is close enough rather than turning
     #: the check off.
-    duplicate_cosine: float = 0.99
+    #:
+    #: 0.85, not 0.99. Measured over every pair in a live memory of 23 statements:
+    #: 0.99 caught none of the 253 pairs, and 0.85 caught the five that restate
+    #: one fact in other words, which is the case this exists for. The nearest pair
+    #: in that memory is 0.903 and its median is 0.716, so a threshold near one
+    #: sees nothing at all and this one still leaves the distinctly-worded pairs
+    #: alone. It is a knob: a memory whose statements are near neighbours by nature
+    #: wants it lower, and one whose statements are short wants it higher.
+    duplicate_cosine: float = 0.85
 
     #: How many candidates each side contributes before fusion. This is an
     #: internal depth, not the answer: the answer is exactly ``limit`` units, and
@@ -235,6 +249,15 @@ class Retrieval:
         then written out from the record, because a memory nobody can open is not
         one anybody can check.
 
+        Two things are refused before the row is written, and both are refused on
+        the statement's own words rather than on anything derived, so the same text
+        is judged the same way every time. A statement carrying a date or a clock
+        time reports a moment instead of saying what holds, which is
+        :func:`store.admission_failure`'s one rule; and the reserved ``HANDOFF``
+        kind is refused here, because a handoff is replaced by the next one and an
+        ordinary record filed under it would be removed by the next session's
+        handoff without ever being seen.
+
         Nothing is refused for being similar to what is already here. A memory that
         refuses a write is a memory a caller cannot write to, and deciding that on
         a write means deciding it with whatever the vectors happen to say that
@@ -247,12 +270,27 @@ class Retrieval:
         statement = str(content or "").strip()
         if not statement:
             raise ModelError("content must not be empty.")
+        failure = admission_failure(statement)
+        if failure is not None:
+            raise ModelError(failure)
         try:
             label = statement_kind(kind)
         except StoreError as error:
             raise ModelError(str(error)) from error
+        if label == HANDOFF_KIND and replace_kind != HANDOFF_KIND:
+            raise ModelError(
+                "HANDOFF is reserved for record_handoff, which holds one and replaces "
+                "it with the next session's, so a statement filed under it here would "
+                "be removed by the next handoff. Use record_handoff, or file this "
+                "statement under a kind of your own."
+            )
         with MemoryIndex(directory) as index:
             _key, replaced = index.insert(statement, label, replace_kind=replace_kind)
+            # A statement whose words were reworded is a new identity, and the
+            # vector of the old one describes text the record no longer holds. The
+            # write path is where that happens, so this is where they are dropped,
+            # and the settle that follows re-embeds what is left.
+            stale = index.collect_vectors()
         embed_pending(directory, self.embedder, self.worker_for(directory))
         # What a write answers with is what it filed: the statement, the kind it
         # was filed under, and anything it removed to file it. The rest is
@@ -265,6 +303,8 @@ class Retrieval:
         }
         if replaced:
             recorded["replaced"] = replaced
+        if stale:
+            recorded["vectors_removed"] = stale
         return recorded
 
     def handoff(self, directory: Path, content: str) -> dict[str, Any]:
@@ -297,10 +337,12 @@ class Retrieval:
         with MemoryIndex(directory) as index:
             adopted = index.adopt_document_if_empty()
             retired = index.retire_superseded()
+            stale = index.collect_vectors()
         queued = embed_pending(directory, self.embedder, self.worker_for(directory))
         return {
             "adopted": adopted,
             "superseded_removed": retired,
+            "vectors_removed": stale,
             "units_queued": queued,
         }
 

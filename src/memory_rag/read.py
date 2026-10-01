@@ -182,7 +182,7 @@ def merge_answers(
     answers: list[Answer],
     *,
     limit: int,
-    duplicate_cosine: float = 0.99,
+    duplicate_cosine: float = 0.85,
 ) -> Answer:
     """Combine one answer per scope into a single ranked answer.
 

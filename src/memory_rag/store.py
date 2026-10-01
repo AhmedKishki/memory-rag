@@ -44,6 +44,7 @@ __all__ = [
     "TEMPLATE",
     "Statement",
     "StoreError",
+    "admission_failure",
     "normalise",
     "parse_document",
     "query_terms",
@@ -87,6 +88,17 @@ _HEADING_PATTERN = re.compile(r"^#\s+\S")
 #: The type a statement imported from a file that still writes it into the block.
 #: Read on import only; never written.
 _LEGACY_KIND_PATTERN = re.compile(r"^([A-Z]{1,64}): ")
+
+#: A calendar date or a clock time written in a statement's own words. The record
+#: dates every statement itself, so one that carries a date says the same thing
+#: twice, and the copy in the prose is the one that goes stale: it is the token
+#: that differs between two accounts of one event, and a statement's identity is a
+#: digest of its words. One approval recorded per session therefore becomes one
+#: statement per session rather than one approval.
+#:
+#: A year alone is not matched, because "(HUP 1971)" names the edition meant and
+#: that has to hold next year.
+_MOMENT_PATTERN = re.compile(r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
 
 
 class StoreError(ValueError):
@@ -150,6 +162,38 @@ def statement_kind(value: str) -> str:
             f"type must be at most {MAX_KIND_LENGTH} characters: it named {len(raw)}."
         )
     return raw.upper()
+
+
+def admission_failure(text: str) -> str | None:
+    """Return why a statement may not be recorded, or ``None`` when it may.
+
+    One rule, and it is the one the record's own shape demands. Every statement is
+    dated when it is recorded: ``added_at`` holds it and a read reports it, so a
+    statement that carries a date or a clock time in its own words is reporting a
+    moment rather than saying what holds. Two such statements about one event are
+    two rows, because a statement's identity is a digest of its words and the date
+    is the part that differs, so a memory recorded across sessions fills with one
+    row per session saying that the work was done.
+
+    The refusal names where the statement belongs rather than restating the rule,
+    because a statement about what was done is not a bad statement. It is a handoff:
+    ``record_handoff`` holds exactly one and replaces it with the next session's, so
+    progress can be recorded without becoming permanent history.
+    """
+
+    found = _MOMENT_PATTERN.search(str(text or ""))
+    if found is None:
+        return None
+    return (
+        f"a statement states what holds, not when it happened, and this one carries "
+        f"{found.group(0)!r}. The memory dates every statement itself and a recall "
+        f"reports that date, so a statement that writes the date out says the same "
+        f"thing twice — and because a statement is known by a digest of its words, "
+        f"the date is exactly what makes two accounts of one event two statements "
+        f"instead of one. Leave the date out. If this is what was done in this "
+        f"session rather than what holds afterwards, record_handoff is the tool for "
+        f"it, and it holds one handoff and replaces it with the next."
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -34,6 +34,18 @@ The test is whether the next request in three weeks would still be governed by
 it. "Always cite the commit that introduced a change" is one. "Rename this file"
 is not: it is finished when it is answered, and nothing later depends on it.
 
+Write what holds, not what happened. A statement carries no date and no time,
+because the memory dates every statement itself and a recall reports that date.
+The server refuses a statement carrying one: a statement that says when something
+was approved is one row per session saying that the work was done, rather than
+one approval. A year on its own is fine — "(HUP 1971)" says which edition is meant
+and that still holds next year.
+
+So "Section 4 T03 is settled by the author's approval" is not a statement, because
+in a month it is a row about a session rather than a fact about the draft. What
+holds is "section 4 keeps Marx's categories as supporting vocabulary under
+Gidwani's framework". Record that, and let the date be the record's own.
+
 RECALL BEFORE YOU RECORD
 
 Whenever something is about to be recorded, recall it first, with a few words
@@ -121,6 +133,11 @@ done, what is in flight, and what to do first. It replaces the previous handoff,
 so a project holds one at a time and a later session never has to work out
 whether it is reading today's or last week's.
 
+Work that was finished belongs there and not in a statement. "The T03 amendments
+were approved" is a moment, and a statement of it is a row that goes stale while
+the memory around it stays true. The handoff says it, keeps it until the session
+after this one, and then lets it go.
+
 WHAT ELSE AN ANSWER TELLS YOU
 
 An answer carries a field only when the field has news. Every statement comes
@@ -136,6 +153,8 @@ has handed it over; a statement with a date carries the date. Beyond that:
                        held that the memory did not have, and then removed
   collapsed_repetitions a statement that said the same thing, and which test
                        caught it
+  vectors_removed       on a write, vectors of statements that no longer exist,
+                       which are dropped so the next settle re-embeds what is left
 
 Nothing else is in an answer: no score, no timing, no position in the document,
 and no count a caller could make for itself. An answer is what was remembered,
