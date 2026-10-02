@@ -711,9 +711,10 @@ def test_the_workspace_declares_a_spacing_and_type_scale() -> None:
 def test_the_workspace_reads_in_light_and_dark() -> None:
     """Both schemes name the same tokens, and the accent is this package's own.
 
-    UltraRAG's surfaces, border, radii, shadows, fonts, and breakpoints are the
-    vocabulary; its accent green and its accent blue are not, because borrowing
-    either would imply a product relationship this package does not have.
+    UltraRAG's radii, shadows, fonts, and breakpoints are the vocabulary; its
+    surfaces and its accent green and accent blue are not. The palette is cream
+    and burnt orange, and borrowing either upstream colour as an accent would
+    imply a product relationship this package does not have.
     """
 
     with _host(ClientControlAdapter()) as client:
@@ -738,14 +739,25 @@ def test_the_workspace_reads_in_light_and_dark() -> None:
     ):
         assert token in light
         assert f"{token}:" in dark_block
-    # The surfaces, the border, and the geometry are UltraRAG's own values.
+    # The palette is cream and burnt orange, not a white page under a violet
+    # accent, and the dark scheme is the same hues at the other end.
     for value in (
-        "--bg-body: #ffffff",
-        "--bg-surface: #f9f9fa",
-        "--bg-sidebar: #f5f5f7",
-        "--text-primary: #1a1a1a",
-        "--text-secondary: #6e6e80",
-        "--border-subtle: #e5e5e5",
+        "--bg-body: #f0eee6",
+        "--bg-surface: #e8e5db",
+        "--bg-sidebar: #eae7dd",
+        "--text-primary: #1c1b19",
+        "--text-secondary: #5d5b55",
+        "--border-subtle: #d9d5c8",
+        "--accent: #b8592f",
+    ):
+        assert value in light
+    for value in (
+        "--bg-body: #1f1e1c",
+        "--accent: #e39070",
+    ):
+        assert value in dark_block
+    # The geometry is still UltraRAG's own.
+    for value in (
         "--radius-sm: 6px",
         "--radius-md: 12px",
         "--radius-lg: 16px",
@@ -759,12 +771,94 @@ def test_the_workspace_reads_in_light_and_dark() -> None:
     declarations = "\n".join(
         line for line in css.splitlines() if line.strip().startswith("--accent")
     )
-    assert "--accent: #6b4bb8;" in declarations
+    assert "--accent: #b8592f;" in declarations
     assert "#10a37f" not in declarations
     assert "#2563eb" not in declarations
     # The breakpoints are the ones UltraRAG declares.
     for breakpoint in ("991.98px", "767.98px", "575.98px"):
         assert breakpoint in css
+
+
+def test_every_pair_that_carries_text_meets_wcag_aa() -> None:
+    """Cream and orange are checked, not assumed.
+
+    The light accent is darkened to #b8592f and the tertiary text to #676458 for
+    exactly this: at the lighter orange and tertiary that read best on cream, white
+    on the accent reaches 4.23:1 and the tertiary on the surface reaches 4.37:1.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        css = client.get("/assets/app.css").text
+    light, _, dark = css.partition("@media (prefers-color-scheme: dark) {")
+
+    schemes = {
+        "light": _tokens(light),
+        "dark": _tokens(dark.split("\n}\n", 1)[0]),
+    }
+    for name, tokens in schemes.items():
+        for pair, need in _TEXT_PAIRS:
+            assert _contrast(tokens[pair[0]], tokens[pair[1]]) >= need, (
+                f"{name}: {pair[0]} on {pair[1]}"
+            )
+
+
+def _tokens(block: str) -> dict[str, str]:
+    """The hex tokens of one scheme, keyed by name without the leading dashes."""
+
+    found: dict[str, str] = {}
+    for line in block.splitlines():
+        name, _, value = line.strip().partition(":")
+        value = value.strip()
+        if value.startswith("#"):
+            found[name.removeprefix("--")] = value.split(";")[0].strip()
+    return found
+
+
+def _contrast(foreground: str, background: str) -> float:
+    def channel(pair: str) -> float:
+        raw = int(pair, 16) / 255.0
+        return raw / 12.92 if raw <= 0.03928 else ((raw + 0.055) / 1.055) ** 2.4
+
+    def luminance(value: str) -> float:
+        digits = value.lstrip("#")
+        red, green, blue = (
+            channel(digits[position : position + 2]) for position in (0, 2, 4)
+        )
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    lighter, darker = sorted(
+        (luminance(foreground), luminance(background)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+_TEXT_PAIRS = (
+    (("text-primary", "bg-card"), 4.5),
+    (("text-primary", "bg-surface"), 4.5),
+    (("text-primary", "bg-body"), 4.5),
+    (("text-primary", "bg-sidebar"), 4.5),
+    (("text-primary", "bg-input"), 4.5),
+    (("text-secondary", "bg-card"), 4.5),
+    (("text-secondary", "bg-surface"), 4.5),
+    (("text-secondary", "bg-sidebar"), 4.5),
+    (("text-secondary", "bg-body"), 4.5),
+    (("text-tertiary", "bg-card"), 4.5),
+    (("text-tertiary", "bg-surface"), 4.5),
+    (("text-tertiary", "bg-sidebar"), 4.5),
+    (("accent-ink", "bg-card"), 4.5),
+    (("accent-ink", "accent-soft"), 4.5),
+    (("on-accent", "accent"), 4.5),
+    (("danger", "bg-card"), 4.5),
+    (("danger", "danger-soft"), 4.5),
+    (("warning", "bg-card"), 4.5),
+    (("warning", "warning-soft"), 4.5),
+    (("ready", "bg-card"), 4.5),
+    (("accent", "bg-card"), 3.0),
+    (("accent-strong", "bg-card"), 3.0),
+    (("accent", "bg-surface"), 3.0),
+    (("accent", "bg-sidebar"), 3.0),
+    (("accent", "bg-input"), 3.0),
+)
 
 
 def test_the_chrome_does_not_print_but_the_passages_do() -> None:
@@ -909,6 +1003,13 @@ def test_the_header_carries_a_projects_selector_the_host_supplies() -> None:
     assert 'id="project-open"' in page.text
     assert 'id="project-start-command"' in page.text
     assert 'id="project-copy-command"' in page.text
+    # The selector is the first thing in the sidebar and above the views, because
+    # changing the workspace is what a reader reaches for before choosing a view.
+    sidebar = page.text.split('class="workspace-sidebar"', 1)[1]
+    assert sidebar.index('id="project-selector"') < sidebar.index(
+        'class="sidebar-list"'
+    )
+    assert page.text.index("</header>") < page.text.index("project-selector")
     assert 'hasCapability("projects")' in script.text
     assert "/api/projects" in script.text
     # The current project is marked in the list, and every entry says whether its

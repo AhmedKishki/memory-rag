@@ -1,55 +1,63 @@
 /*
- * The workspace reads on UltraRAG's own vocabulary: the neutral surface greys,
- * the three text levels, the subtle border, the 6/12/16 radii, the three
- * shadows, Inter for the interface and JetBrains Mono for code, and the 576 /
- * 768 / 992 breakpoints. Those values are taken from UltraRAG's design tokens
- * so the two surfaces read as one product. Inter and JetBrains Mono are asked
- * for by name and fall back through the system stack; nothing is downloaded,
- * because a page that must fetch a font to be legible is not a local tool.
+ * The workspace is cream and dark orange, after Anthropic's own palette: a warm
+ * paper ground, warm greys rather than neutral ones, near-black and warm-black
+ * text, and one accent that is a burnt orange.
+ *
+ * The geometry is not the palette's. UltraRAG's 6/12/16 radii, its three shadows,
+ * Inter for the interface and JetBrains Mono for code, and the 576 / 768 / 992
+ * breakpoints are taken from its design tokens so the two surfaces read as one
+ * product. Inter and JetBrains Mono are asked for by name and fall back through
+ * the system stack; nothing is downloaded, because a page that must fetch a font
+ * to be legible is not a local tool.
  *
  * Three deviations from those tokens, each deliberate:
- *   - the accent is violet, not UltraRAG's #10a37f or #2563eb, because this
- *     package has no product relationship with either;
- *   - --text-tertiary is darkened from #9ca3af, which reaches only 2.54:1 on a
- *     card and cannot carry readable text under WCAG AA;
+ *   - the accent is a burnt orange, not UltraRAG's #10a37f or #2563eb, because
+ *     this package has no product relationship with either;
+ *   - the surfaces and the three text levels are cream and warm rather than
+ *     UltraRAG's neutral greys, because the palette is the accent's own and a
+ *     white page under a burnt-orange accent reads as two products;
  *   - a spacing scale and a type scale are declared here and used everywhere,
  *     because ad-hoc small values are what made the page feel cramped.
+ *
+ * The light accent is #b8592f and not a lighter orange because white text sits
+ * on it: at #c15f3c that pair reaches 4.23:1 and fails AA. --text-tertiary is
+ * darkened to #676458 for the same reason against the cream surface and sidebar.
  */
 
 :root {
   color-scheme: light;
 
-  /* Surfaces, from UltraRAG. */
-  --bg-body: #ffffff;
-  --bg-surface: #f9f9fa;
-  --bg-card: #ffffff;
-  --bg-sidebar: #f5f5f7;
-  --bg-input: #eff1f5;
+  /* Surfaces: warm paper, each one a step from the last. */
+  --bg-body: #f0eee6;
+  --bg-surface: #e8e5db;
+  --bg-card: #faf9f5;
+  --bg-sidebar: #eae7dd;
+  --bg-input: #fffdf7;
 
   /* Three text levels. The tertiary is darkened for AA; see the note above. */
-  --text-primary: #1a1a1a;
-  --text-secondary: #6e6e80;
-  --text-tertiary: #676c7b;
+  --text-primary: #1c1b19;
+  --text-secondary: #5d5b55;
+  --text-tertiary: #676458;
 
-  --border-subtle: #e5e5e5;
+  --border-subtle: #d9d5c8;
 
-  /* The accent for every interactive and active state. Violet is this
-     package's own: it is far from UltraRAG's green and blue, and it leaves
-     green and amber free for the ready and warning states. */
-  --accent: #6b4bb8;
-  --accent-strong: #59399f;
-  --accent-soft: #efe9fb;
-  --accent-ink: #5a3ba6;
+  /* The accent for every interactive and active state. A burnt orange is this
+     package's own: it is far from UltraRAG's green and blue, and green and
+     amber stay free for the ready and warning states. */
+  --accent: #b8592f;
+  --accent-strong: #a44e30;
+  --accent-soft: #f7e6dc;
+  --accent-ink: #9c4119;
   --on-accent: #ffffff;
 
   --danger: #9a2020;
   --danger-strong: #7c1919;
   --danger-soft: #fdf1f1;
-  --danger-border: #eccaca;
+  --danger-border: #e7c6bd;
 
-  --warning: #6f4e00;
+  --warning: #7a4f00;
   --warning-soft: #fdf6e0;
-  --warning-border: #e3d08a;
+  --warning-border: #e0cb98;
 
   --ready: #1f6b3a;
 
@@ -99,31 +107,31 @@
   :root {
     color-scheme: dark;
 
-    --bg-body: #131316;
-    --bg-surface: #1c1c20;
-    --bg-card: #1c1c20;
-    --bg-sidebar: #151518;
-    --bg-input: #26262b;
+    --bg-body: #1f1e1c;
+    --bg-surface: #2a2926;
+    --bg-card: #2a2926;
+    --bg-sidebar: #191817;
+    --bg-input: #35332f;
 
-    --text-primary: #f2f2f4;
-    --text-secondary: #a9a9b6;
-    --text-tertiary: #94949f;
+    --text-primary: #f5f3ec;
+    --text-secondary: #b6b2a8;
+    --text-tertiary: #9b978c;
 
-    --border-subtle: #2f2f36;
+    --border-subtle: #403d37;
 
-    --accent: #b9a2ff;
-    --accent-strong: #cbb8ff;
-    --accent-soft: #2a2140;
-    --accent-ink: #cbb8ff;
-    --on-accent: #15101f;
+    --accent: #e39070;
+    --accent-strong: #eda98d;
+    --accent-soft: #3c2418;
+    --accent-ink: #efaa8b;
+    --on-accent: #241009;
 
     --danger: #ffb3b3;
     --danger-strong: #ffc9c9;
     --danger-soft: #2a1618;
     --danger-border: #5a2a2c;
 
-    --warning: #f0c96b;
-    --warning-soft: #262009;
+    --warning: #eec46a;
+    --warning-soft: #2a2209;
     --warning-border: #4a3f16;
 
     --ready: #7fd39b;
@@ -277,14 +285,13 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* The project selector stays in the header and is given room: a labelled
-   control at pointer height, its own note, and the start command on a line of
-   its own instead of crammed in beside the select. */
+/* The project selector sits at the top of the sidebar, above the views, because
+   changing the workspace is what a reader reaches for before choosing a view. It
+   spans the column rather than a flex basis, and is separated from the views so
+   the nav reads as one list. */
 .project-selector {
   display: grid;
   min-width: 0;
-  max-width: 26rem;
-  flex: 0 1 26rem;
   gap: var(--space-2xs);
   padding: var(--space-xs);
   border: 1px solid var(--border-subtle);
@@ -1828,12 +1835,6 @@ textarea:disabled {
   .project-identity {
     flex: 1 1 100%;
     order: 3;
-  }
-
-  .project-selector {
-    order: 4;
-    max-width: none;
-    flex: 1 1 100%;
   }
 
   .setting-row {

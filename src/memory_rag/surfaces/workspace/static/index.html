@@ -35,26 +35,6 @@
         <span id="version-label" class="version-label" hidden></span>
       </div>
 
-      <div id="project-selector" class="project-selector" data-capability="projects" hidden>
-        <label class="project-selector-field" for="project-select">
-          <span class="field-label">Projects</span>
-          <select id="project-select" name="project"></select>
-        </label>
-        <p class="form-note project-selector-note">
-          Opening another project opens its own workspace in a new tab.
-        </p>
-        <p id="project-selector-message" class="form-note" hidden></p>
-        <p id="project-start-command" class="project-start-command" hidden></p>
-        <div class="project-actions">
-          <button id="project-open" class="button button-primary" type="button" hidden>
-            Open workspace
-          </button>
-          <button id="project-copy-command" class="text-button" type="button" hidden>
-            Copy start command
-          </button>
-        </div>
-      </div>
-
       <div class="header-actions">
         <span id="connection-state" class="connection-state" data-state="loading">
           <span class="status-dot" aria-hidden="true"></span>
@@ -77,6 +57,26 @@
 
     <div class="app-body">
       <nav id="workspace-nav" class="workspace-sidebar" aria-label="Knowledge base views">
+        <div id="project-selector" class="project-selector" data-capability="projects" hidden>
+          <label class="project-selector-field" for="project-select">
+            <span class="field-label">Projects</span>
+            <select id="project-select" name="project"></select>
+          </label>
+          <p class="form-note project-selector-note">
+            Opening another project opens its own workspace in a new tab.
+          </p>
+          <p id="project-selector-message" class="form-note" hidden></p>
+          <p id="project-start-command" class="project-start-command" hidden></p>
+          <div class="project-actions">
+            <button id="project-open" class="button button-primary" type="button" hidden>
+              Open workspace
+            </button>
+            <button id="project-copy-command" class="text-button" type="button" hidden>
+              Copy start command
+            </button>
+          </div>
+        </div>
+
         <ul class="sidebar-list">
           <li class="sidebar-item is-active" data-view="search" data-capability="documents">
             <button class="nav-item is-active" type="button" aria-current="page">
