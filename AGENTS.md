@@ -111,9 +111,9 @@ Rules a change to this product has to be argued against: what the product is, wh
 
 ### Boundaries a contributor must not cross
 
-- Keep the engine free of the web stack. `tests/test_architecture.py` fails when a module outside `surfaces/` imports `fastmcp`, `mcp`, `pydantic`, `starlette`, `uvicorn`, or `ui_ultra_rag_mcp`, and when any module reaches for a surface.
+- Keep the engine free of the web stack. `tests/test_architecture.py` fails when a module outside `surfaces/` imports `fastmcp`, `mcp`, `pydantic`, `starlette`, or `uvicorn`, and when any module reaches for a surface.
 - Declare each tool once, in `surfaces/mcp.py`, and let the stdio bridge proxy them. A re-declared tool is a second place for it to be wrong.
-- Serve the workspace from the pinned `ui-ultra-rag-mcp` and never copy its static files in. A copy stops receiving the fixes the pinned package gets.
+- Serve the workspace from `surfaces/workspace/` and keep it there. The workspace is this app's own code, so a fix to it ships in this app's release, and `tests/test_architecture.py` fails when its assets are found anywhere else in the package.
 - Keep browser and control writes same-origin, JSON-only, and loopback-only.
   - A capability that is off is a control that is not rendered, rather than one that is rendered and refused.
 - Keep the package's `surfaces/` split: no surface imports another. A capability reached from two surfaces is a capability implemented where both can see it.
@@ -146,8 +146,9 @@ src/memory_rag/
     cli.py      the command centre
     mcp.py      the per-kind tools and the instructions
     ui.py       the workspace profile, the adapter, and the SQL panel
+    workspace/  the browser workspace: the app, its contracts, its assets
   <engine>      index, store, vectors, read, retrieval, maintenance, models,
-                settings, instructions, reference
+                settings, settings_layers, instructions, reference
 ```
 
 - Dependencies run downward only.

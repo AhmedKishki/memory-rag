@@ -21,10 +21,10 @@ layer that supplied it, so ``--print-config`` can say where a number came from
 rather than only what it is.
 
 The stack itself, the registry's ``Setting`` type, the coercion every layer
-shares, the provenance, and the three path helpers live in the separately
-versioned ``config-ultra-rag-mcp`` library, pinned by commit. What is left here
-is this server's own vocabulary: the keys, their types and bounds, the packaged
-default, and the effective settings the code reads.
+shares, the provenance, and the three path helpers live in ``settings_layers``
+beside this module. What is declared here is this app's own vocabulary: the
+keys, their types and bounds, the packaged default, and the effective settings
+the code reads.
 """
 
 from __future__ import annotations
@@ -34,7 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from config_ultra_rag_mcp import (
+from .models import available_rerankers
+from .settings_layers import (
     Setting,
     SettingsError,
     SettingsSources,
@@ -42,8 +43,6 @@ from config_ultra_rag_mcp import (
     project_config_path,
     user_config_path,
 )
-
-from .models import available_rerankers
 
 __all__ = [
     "SETTINGS",

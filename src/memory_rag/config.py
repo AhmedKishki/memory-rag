@@ -25,10 +25,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from config_ultra_rag_mcp import SettingsError, resolve_settings
 from platformdirs import user_data_path
 
 from .settings import SETTINGS, EffectiveSettings, sources_for
+from .settings_layers import SettingsError, resolve_settings
 
 __all__ = [
     "APP_NAME",

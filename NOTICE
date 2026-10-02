@@ -62,12 +62,15 @@ each carries its own licence.
 
 THE BROWSER WORKSPACE
 
-The workspace is built on ui-ultra-rag-mcp, an independent companion project that
-provides reusable local UI infrastructure for UltraRAG-derived MCP servers, pinned here
-by commit. It is not part of UltraRAG and carries no UltraRAG code. This project
-supplies a thin adapter and a profile; no part of the workspace is copied in, and this
-project declares the corpus capabilities off because it serves memories rather than
-documents.
+The workspace and the settings layer are this project's own code. Both were developed
+in earlier companion repositories, ui-ultra-rag-mcp and config-ultra-rag-mcp, and are
+part of this codebase here, so this project resolves no dependency on either.
+
+    Workspace:      src/memory_rag/surfaces/workspace/
+    Settings layer: src/memory_rag/settings_layers/
+
+This project supplies the profile and the adapter, and declares the corpus capabilities
+off because it serves memories rather than documents.
 
 The settings layer is built on config-ultra-rag-mcp, an independent companion project,
 likewise pinned by commit. Neither companion project reads this project's storage, and

@@ -25,7 +25,6 @@ WEB_MODULES = {
     "pydantic",
     "starlette",
     "uvicorn",
-    "ui_ultra_rag_mcp",
 }
 
 #: The modules allowed to import the stack above. `surfaces/cli.py` is deliberately
@@ -40,6 +39,10 @@ SURFACE_MODULES = {
     "surfaces/mcp.py",
     "surfaces/ui.py",
 }
+
+#: The workspace is this app's own browser front end, so it is a surface by being
+#: under `surfaces/`. Every module in it is one, and none of them is engine.
+WORKSPACE = "surfaces/workspace"
 
 #: The engine: everything that opens a memory. It may not import a surface, because a
 #: surface is a way of presenting an answer and a record does not know how it is read.
@@ -123,6 +126,7 @@ def _engine_files() -> list[Path]:
         path
         for path in sorted(SOURCE.rglob("*.py"))
         if path.relative_to(SOURCE).as_posix() not in SURFACE_MODULES
+        and not path.relative_to(SOURCE).as_posix().startswith(f"{WORKSPACE}/")
         and path.relative_to(SOURCE).as_posix() != "__main__.py"
     ]
 
@@ -251,16 +255,19 @@ def test_no_module_registers_a_tool_outside_the_agent_surface() -> None:
                 )
 
 
-def test_the_workspace_is_never_copied_in() -> None:
-    """The shared workspace stays a pinned dependency, not a vendored copy.
+def test_the_workspace_is_this_apps_own_code() -> None:
+    """The workspace is a surface of this app, not a dependency of it.
 
-    A copy is a second implementation of the same interface that stops receiving the
-    fixes the first one gets, and this product's workspace would then be the one left
-    behind.
+    It is served from `surfaces/workspace/`, so a fix to it ships with this app
+    rather than waiting on a pinned package, and its assets travel in the same
+    wheel as the code that serves them.
     """
 
+    workspace = SOURCE / WORKSPACE
+    for name in ("app.py", "contracts.py", "static/index.html", "static/app.js"):
+        assert (workspace / name).is_file(), f"{name} is missing from {WORKSPACE}"
     for name in ("static", "index.html", "app.js", "app.css"):
         assert not (SOURCE / name).exists(), (
-            f"{name} was found inside the package. The workspace is served by the "
-            "pinned ui-ultra-rag-mcp dependency and is never copied in."
+            f"{name} was found at the package root. The workspace is served from "
+            f"{WORKSPACE}/ and has one copy."
         )

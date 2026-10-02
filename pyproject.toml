@@ -21,11 +21,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    # The layer stack behind the settings: the registry type, the merge, the
-    # coercion every layer shares, the provenance, and the path helpers. Pinned
-    # by commit, as the sibling repositories do, because two products sharing it
-    # is the whole point and a floating version is not.
-    "config-ultra-rag-mcp @ git+https://github.com/AhmedKishki/config-ultra-rag-mcp.git@cbd47bb46efe85340de34f8f8f13fc6516e7fecb",
     # Local models, on CPU, run in process. The embedder is what makes a lookup
     # work without assuming the caller's wording; numpy is the exact vector scan
     # behind it, and is pinned explicitly rather than through onnxruntime.
@@ -36,9 +31,10 @@ dependencies = [
     "platformdirs==4.11.10",
     # The control channel between the command line and the running app.
     "httpx>=0.28",
-    # The shared browser view. Pinned by commit, as the sibling repositories do:
-    # the workspace is interface infrastructure with its own release history.
-    "ui-ultra-rag-mcp @ git+https://github.com/AhmedKishki/ui-ultra-rag-mcp.git@f255701c25ffafcfee2d25b700b777d85247eb17",
+    # The workspace's own web stack, declared here because the workspace is this
+    # package's code rather than a dependency it resolves.
+    "starlette>=1.6,<2",
+    "uvicorn>=0.53,<1",
 ]
 
 [project.scripts]
@@ -69,6 +65,9 @@ where = ["src"]
 # `sources_for` reads this one file from beside `settings.py`. Without this the
 # built wheel has no defaults and the app refuses to start.
 memory_rag = ["default.toml"]
+# The workspace's assets ship with the code that serves them, so a wheel holds
+# one copy of each.
+"memory_rag.surfaces.workspace" = ["static/*.css", "static/*.html", "static/*.js"]
 
 [tool.uv]
 package = true

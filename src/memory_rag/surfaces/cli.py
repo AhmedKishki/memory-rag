@@ -932,9 +932,8 @@ def _doctor(account: AccountConfig) -> CommandResult:
 
 
 def _config(account: AccountConfig) -> CommandResult:
-    from config_ultra_rag_mcp import describe_settings
-
     from ..settings import SETTINGS
+    from ..settings_layers import describe_settings
 
     values = {
         setting.field: getattr(account.settings, setting.field)

@@ -17,13 +17,12 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
-from ui_ultra_rag_mcp import UICapabilities, UIProfile, create_ui_app
-from ui_ultra_rag_mcp.contracts import SourceFile, UIRequestError
-
 from ..app import ClientError, ClientRegistry
 from ..index import MemoryIndex
 from ..service import MemoryService
 from ..sql import SqlRefusal
+from .workspace import UICapabilities, UIProfile, create_ui_app
+from .workspace.contracts import SourceFile, UIRequestError
 
 PROFILE = UIProfile(
     application_name="memory-rag",
