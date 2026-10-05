@@ -9,8 +9,8 @@ description: Memory app boundaries, shared-storage compatibility, and contributi
 
 - One account-wide process serves global and registered-project memories over one loopback port.
   - Browser, CLI, and MCP use the same service; agents get only memory tools.
-- Ship this app's engine and workspace here, independently of the stdio server.
-  - Preserve their shared storage contract, not identical source code.
+- Ship this app's engine and workspace here, independently of any sibling product.
+  - Preserve the storage contract rather than identical source code.
 - Preserve UltraRAG attribution, licences, `NOTICE`, and the independent-project disclaimer.
 
 ## Documentation responsibilities
@@ -58,9 +58,9 @@ description: Memory app boundaries, shared-storage compatibility, and contributi
 ### The state a reader must be able to trust
 
 - Run one app per account; namespace project runtime paths with `memory-rag`.
-- Preserve the shared settings directory `memory-ultra-rag-mcp`, `MEMORY_ULTRARAG_*` prefix, model cache, and scope names.
+- Preserve the settings directory `memory-ultra-rag-mcp`, the `MEMORY_ULTRARAG_*` prefix, the model cache, and the scope names.
   - `tests/test_registry.py` and `tests/test_documentation.py` pin these names.
-- The shared on-disk contract is frozen while `memory-ultra-rag-mcp-server` is installed.
+- The on-disk contract is frozen while an installed copy reads and writes the same files.
   - The record is `memory.sqlite3`, under `<project-root>/.memory-rag/` and `<storage-root>/memory/default/`.
   - Its schema version is `8`.
   - FTS5 statement rows are the word index and record.

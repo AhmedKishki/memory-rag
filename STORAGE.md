@@ -2,7 +2,7 @@
 
 The on-disk format: every directory, file, column, and field name. The only document that defines a field name.
 
-- The format is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because the memory server reads and writes the same files.
+- The format is frozen while an installed copy reads and writes the same files.
   - A change may add to the format, but no change may rename a path or a column.
   - `AGENTS.md` states the rule and `tests/test_compatibility.py` pins the values.
 
