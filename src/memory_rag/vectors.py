@@ -85,7 +85,8 @@ class VectorStore:
         *,
         stamp: str,
         kind: str,
-    ) -> str:
+        expected_text: str | None = None,
+    ) -> str | None:
         """Store one statement's vector under its own key, and return that key.
 
         The key is the record's, not a digest of the text embedded: the text of a
@@ -103,21 +104,31 @@ class VectorStore:
             )
         connection = self._open()
         self._refuse_foreign_model(connection)
-        connection.execute(
+        sql = (
             "INSERT OR REPLACE INTO vector"
             "(unit_key, stamp, kind, model, dimension, components) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                key,
-                stamp,
-                kind,
-                self.model,
-                self.dimension,
-                _pack(vector),
-            ),
         )
+        values: tuple[object, ...] = (
+            key,
+            stamp,
+            kind,
+            self.model,
+            self.dimension,
+            _pack(vector),
+        )
+        if expected_text is None:
+            sql += "VALUES (?, ?, ?, ?, ?, ?)"
+        else:
+            # Check and insert together; an embedding may finish after a record edit.
+            sql += (
+                "SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS ("
+                "SELECT 1 FROM unit WHERE unit_key = ? AND text = ? "
+                "AND kind = ? AND CAST(stamp AS TEXT) = ?)"
+            )
+            values += (key, expected_text, kind, stamp)
+        cursor = connection.execute(sql, values)
         connection.commit()
-        return key
+        return key if cursor.rowcount else None
 
     def _refuse_foreign_model(self, connection: sqlite3.Connection) -> None:
         """Raise if this file holds vectors from a different model."""
@@ -138,7 +149,7 @@ class VectorStore:
         if row[0] != self.model:
             raise ValueError(
                 f"{self.path} holds vectors from {row[0]!r}, not {self.model!r}; "
-                "delete the file to rebuild it with this model"
+                "run reindex to rebuild the vectors without deleting the memory record"
             )
         width = connection.execute(
             "SELECT value FROM meta WHERE key = 'dimension'"

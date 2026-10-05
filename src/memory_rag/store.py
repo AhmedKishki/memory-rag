@@ -39,7 +39,6 @@ __all__ = [
     "EXPORT_FILENAME",
     "HANDOFF_KIND",
     "KINDS",
-    "Kind",
     "MAX_KIND_LENGTH",
     "SCOPE_EITHER",
     "SCOPE_GLOBAL",
@@ -47,6 +46,7 @@ __all__ = [
     "SEED",
     "STOPWORDS",
     "TEMPLATE",
+    "Kind",
     "Statement",
     "StoreError",
     "admission_failure",
@@ -219,6 +219,7 @@ def kind_named(name: str) -> Kind:
         )
     return entry
 
+
 _HEADING_PATTERN = re.compile(r"^#\s+\S")
 
 #: The type a statement imported from a file that still writes it into the block.
@@ -234,7 +235,9 @@ _LEGACY_KIND_PATTERN = re.compile(r"^([A-Z]{1,64}): ")
 #:
 #: A year alone is not matched, because "(HUP 1971)" names the edition meant and
 #: that has to hold next year.
-_MOMENT_PATTERN = re.compile(r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+_MOMENT_PATTERN = re.compile(
+    r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+)
 
 
 class StoreError(ValueError):

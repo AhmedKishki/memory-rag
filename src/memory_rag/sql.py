@@ -15,6 +15,11 @@ write path is bounded to statements for the reason above: a write that dropped a
 table, changed the schema version, or edited the vector table directly would leave a
 memory whose words and whose vectors describe different records, which is a memory
 that answers wrongly rather than one that fails loudly.
+
+A read SQLite cannot run and a write that would leave a row the record cannot count are
+both refusals in this module's words: a raw ``sqlite3.Error`` reaches the terminal as a
+traceback and the browser as a 500, naming neither the statement nor what to write
+instead.
 """
 
 from __future__ import annotations
@@ -74,7 +79,7 @@ _FORBIDDEN = (
 )
 
 _TARGET = re.compile(
-    r"^\s*(?:insert\s+or\s+\w+\s+into|insert\s+into|update|delete\s+from)\s+"
+    r"^\s*(?:insert\s+or\s+\w+\s+into|insert\s+into|replace\s+into|update|delete\s+from)\s+"
     r"(?:\"?([A-Za-z_][A-Za-z0-9_]*)\"?|main\s*\.\s*\"?([A-Za-z_][A-Za-z0-9_]*)\"?)",
     re.IGNORECASE,
 )
@@ -113,9 +118,12 @@ def sql_query(scope: Any, statement: str) -> dict[str, Any]:
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         connection.row_factory = sqlite3.Row
-        cursor = connection.execute(text)
-        columns = [description[0] for description in cursor.description or []]
-        rows = [list(row) for row in cursor.fetchmany(MAXIMUM_ROWS + 1)]
+        try:
+            cursor = connection.execute(text)
+            columns = [description[0] for description in cursor.description or []]
+            rows = [list(row) for row in cursor.fetchmany(MAXIMUM_ROWS + 1)]
+        except sqlite3.Error as error:
+            raise SqlRefusal(f"SQLite could not run that read: {error}") from error
     finally:
         connection.close()
     truncated = len(rows) > MAXIMUM_ROWS
@@ -134,10 +142,14 @@ def sql_query(scope: Any, statement: str) -> dict[str, Any]:
 def sql_execute(scope: Any, statement: str) -> dict[str, Any]:
     """Run a write against one memory's statements, and report what it touched.
 
-    The statements a write touched are found by comparing the record before and after
-    rather than by reading the write's own ``WHERE`` clause, because a ``WHERE`` that
-    was wrong once will be wrong again and the consequence of guessing is a vector
-    left describing a statement that is no longer there.
+    The statements a write touched are found by comparing the record before and after,
+    not by reading its own ``WHERE`` clause: a ``WHERE`` that was wrong once will be
+    wrong again, and guessing wrong leaves a vector describing a statement that is gone.
+
+    A write is refused before it is committed if it leaves a row the record cannot read
+    back, because the record counts a statement's place and its recall count and every
+    later read of a row like that fails. The whole record is checked, which is one more
+    pass over it on a path an operator walks once by hand.
     """
 
     text = _checked(statement)
@@ -149,6 +161,10 @@ def sql_execute(scope: Any, statement: str) -> dict[str, Any]:
         connection.execute("PRAGMA foreign_keys=ON")
         cursor = connection.execute(text)
         affected = cursor.rowcount
+        unreadable = _unreadable_row(connection)
+        if unreadable is not None:
+            connection.rollback()
+            raise SqlRefusal(unreadable)
         connection.commit()
     except sqlite3.Error as error:
         connection.rollback()
@@ -280,6 +296,59 @@ def _snapshot(path: Path) -> dict[str, str]:
         }
     finally:
         connection.close()
+
+
+def _is_countable(value: object) -> bool:
+    """Whether a column the record counts holds something it reads back as a number.
+
+    An absent or empty value is the same absence and reads as zero; words are not. A
+    place of ``first`` makes every later read of the row raise a conversion error
+    instead of naming anything a reader can act on.
+    """
+
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    try:
+        int(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _unreadable_row(connection: sqlite3.Connection) -> str | None:
+    """Return why a row of the record cannot be read back, or None when every row can.
+
+    One pass over the record, on the connection the write already holds and before it is
+    committed. Every row is checked rather than the rows the write's own ``WHERE`` names,
+    because a ``WHERE`` that was wrong once will be wrong again.
+    """
+
+    rows = connection.execute(
+        "SELECT unit_key, text, stamp, recalls FROM unit"
+    ).fetchall()
+    for unit_key, text, stamp, recalls in rows:
+        if not isinstance(text, str):
+            return _unreadable(unit_key, "text", text)
+        if not _is_countable(stamp):
+            return _unreadable(unit_key, "stamp", stamp)
+        if not _is_countable(recalls):
+            return _unreadable(unit_key, "recalls", recalls)
+    return None
+
+
+def _unreadable(unit_key: object, column: str, value: object) -> str:
+    """Return the refusal for one row the record cannot read back."""
+
+    return (
+        f"the statement {unit_key!r} would hold {column}={value!r}, which the record "
+        "cannot read back: a statement's place and its recall count are whole numbers "
+        "and its words are text, so a row like that fails every later read of this "
+        "memory. The write was rolled back. Write whole numbers there, or change only "
+        "the words."
+    )
 
 
 def drop_vectors(directory: Path, keys: Iterable[str]) -> int:

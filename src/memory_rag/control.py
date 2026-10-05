@@ -27,6 +27,11 @@ from .config import ConfigurationError
 from .registry import RegistryError
 from .service import MemoryService
 from .sql import SqlRefusal
+from .surfaces.workspace.write_guard import (
+    json_content_type,
+    served_authority,
+    write_refusal,
+)
 
 #: A recall or a write over a loopback socket with a model behind it is bounded by the
 #: model, not by the socket, so the timeout is generous and a caller that needs longer
@@ -191,7 +196,7 @@ async def _sql_execute(app: App, request: Request) -> JSONResponse:
 
 
 async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
-    """Turn a named refusal into a named error, and leave the rest to the app.
+    """Run one endpoint, turning its own refusals into answers a caller can act on.
 
     A refusal the caller can act on is a 400 with the reason; a fault it cannot is the
     app's own 500, which names the log.
@@ -209,6 +214,54 @@ async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
         return _json({"error": str(exc)}, status_code=400)
 
 
+def _foreign_host(request: Request) -> JSONResponse | None:
+    """Refuse a request whose ``Host`` does not name this app, or None to let it through.
+
+    This API is for the command line on the same machine, and it both writes and reads
+    every memory. Binding it to loopback stops a remote host, but a browser page on a
+    domain that resolves to this machine is not remote: its connection arrives from
+    loopback, and the ``Host`` and ``Origin`` it sends both name its own domain, so an
+    origin comparison is satisfied by the page rather than by the user. The name is what
+    cannot be forged that way, and it is checked before any route runs, on a read as well
+    as on a write: a rebound page reads the answer to a read just as it can make one.
+    """
+
+    if served_authority(request) is not None:
+        return None
+    return _json(
+        {
+            "error": (
+                "This API answers requests that name this app's own loopback address. "
+                "A request naming another host was refused before it reached a route; "
+                "run 'memory-rag status' on this machine instead of opening the API "
+                "from a browser."
+            )
+        },
+        status_code=403,
+    )
+
+
+def _write_refusal(request: Request) -> JSONResponse | None:
+    """Refuse a write this app cannot show came from its own page on this machine.
+
+    Every control route that is not a ``GET`` changes what an account holds, so each
+    takes the gates the workspace's own routes take, from one implementation rather than
+    a line each endpoint remembers to copy. A cross-origin form post is a simple request:
+    the browser sends it with no preflight and any content type it likes, so the JSON
+    requirement is a gate rather than a description.
+    """
+
+    refusal = write_refusal(request)
+    if refusal is not None:
+        status, reason = refusal
+        return _json({"error": reason}, status_code=status)
+    if not json_content_type(request):
+        return _json(
+            {"error": "Write requests require application/json"}, status_code=415
+        )
+    return None
+
+
 def control_routes(app: App) -> list[Route]:
     """The routes the command line talks to, on the app's own port.
 
@@ -218,6 +271,13 @@ def control_routes(app: App) -> list[Route]:
 
     def route(path: str, endpoint: Any, methods: list[str]) -> Route:
         async def bound(request: Request) -> JSONResponse:
+            refused = _foreign_host(request)
+            if refused is not None:
+                return refused
+            if "GET" not in methods:
+                refused = _write_refusal(request)
+                if refused is not None:
+                    return refused
             return await _handle(app, endpoint, request)
 
         bound.__name__ = getattr(endpoint, "__name__", "control")

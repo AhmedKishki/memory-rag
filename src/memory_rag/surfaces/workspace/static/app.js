@@ -34,6 +34,12 @@ function applyProfile(profile) {
   byId("workspace-nav").setAttribute("aria-label", profile.navigation_label);
   byId("sidebar-project-label").textContent = profile.project_label;
   byId("ingest-intro").textContent = profile.ingest_intro;
+  // Whether a build can be continued is the host's own fact about its own
+  // pipeline, so the sentence that says so arrives with the rest of its wording
+  // and a host that makes no claim shows none.
+  const ingestNote = byId("ingest-note");
+  ingestNote.textContent = profile.ingest_resume_note || "";
+  ingestNote.hidden = !profile.ingest_resume_note;
   // An empty footer removes the element rather than leaving an empty band: the
   // quotation rule belongs in the documentation, not in every view.
   const footer = byId("footer-text");
@@ -54,13 +60,25 @@ function applyProfile(profile) {
   const visibleNavItems = [...document.querySelectorAll(".sidebar-item")].filter(
     (item) => !item.hidden,
   );
+  // The filter section is a group of capability-gated fields, so it goes when
+  // the last of them goes: a heading over nothing is a heading a reader stops on.
+  const filterSection = byId("filter-section");
+  filterSection.hidden = !filterSection.querySelector(
+    "[data-capability]:not([hidden])",
+  );
+  byId("filter-fields").hidden = filterSection.hidden;
   // A nav item is one panel's way in, so a sidebar holding none is a rule above
   // nothing and goes with them. The active view is chosen from the items that
   // survived the profile, and a profile that leaves none shows no panel at all
   // rather than the panel of an item that is gone.
   byId("workspace-nav").hidden = !visibleNavItems.length;
   byId("nav-toggle").hidden = !visibleNavItems.length;
-  const activeItem = visibleNavItems.find((item) => item.classList.contains("is-active"));
+  // A host whose first view is not one it serves must still open on something.
+  // Falling through to the first item a reader can reach is better than a page
+  // whose only marked view is switched off and which therefore shows nothing.
+  const activeItem =
+    visibleNavItems.find((item) => item.classList.contains("is-active"))
+    || visibleNavItems[0];
   switchView(activeItem ? activeItem.dataset.view : null);
 }
 
@@ -121,22 +139,47 @@ function compactId(value) {
   return `${text.slice(0, 9)}…${text.slice(-6)}`;
 }
 
+// A byline says who wrote a source and when, and only what it actually has: a
+// source with no reviewed year shows the authors alone rather than an empty
+// separator, and one with neither says so in words instead of printing a
+// placeholder the reader has to recognise as missing.
 function authorLine(source) {
   const authors = Array.isArray(source.authors)
     ? source.authors.map(inlineText).filter(Boolean)
     : [];
   const parts = [];
   if (authors.length) parts.push(authors.join("; "));
-  if (source.year) parts.push(String(source.year));
-  return parts.join(" · ") || "Authorship and year not reviewed";
+  const year = source.year ?? source.publication_year;
+  if (year !== null && year !== undefined && String(year).trim()) {
+    parts.push(String(year));
+  }
+  if (parts.length) return parts.join(" · ");
+  return source.authors === undefined && source.year === undefined
+    ? "Authorship and year not reviewed"
+    : "Authorship not reviewed";
 }
 
+// A locator says where in a source a passage sits. The server may name its kind,
+// may name only a page, or may hand over a string it already formatted; whatever
+// it sends, the label reports what is there. It never guesses a format the
+// payload did not claim, because a section index labelled for one format is a
+// statement about the reader's source that nothing in the payload supports.
 function locatorLabel(locator) {
   if (!locator) return "Source passage";
-  if (locator.type === "pdf_page") {
-    return `Page ${locator.page_label || locator.page || "?"}`;
+  if (typeof locator === "string") return locator.trim() || "Source passage";
+  const pageData = locator.page_data || {};
+  const page = locator.page_label ?? locator.page ?? pageData.page_label ?? pageData.page;
+  const hasPage = page !== null && page !== undefined && String(page).trim() !== "";
+  if (locator.type === "pdf_page" || (locator.type === undefined && hasPage)) {
+    return `Page ${hasPage ? page : "?"}`;
   }
-  return locator.section_title || locator.href || `EPUB section ${locator.section_index || "?"}`;
+  const section = locator.section_title || pageData.section_title || locator.href;
+  if (section) return inlineText(section);
+  const index = locator.section_index ?? pageData.section_index;
+  if (index !== null && index !== undefined && String(index).trim() !== "") {
+    return `Section ${index}`;
+  }
+  return "Passage location not reported";
 }
 
 function sourceForDocument(documentId) {
@@ -223,6 +266,57 @@ function configureRetrieval(status) {
   byId("search-button").disabled = !status.ready || state.busy;
 }
 
+// A label and a value, one pair per row. Two columns keep the label readable at
+// a glance and give the value every remaining pixel, which is what an identifier
+// needs; below the medium breakpoint the pair stacks so neither half is squeezed.
+function factList(pairs, className) {
+  const list = node("dl", className);
+  for (const [label, value] of pairs) {
+    list.append(node("dt", "fact-label", label));
+    list.append(node("dd", "fact-value", value));
+  }
+  return list;
+}
+
+// What the server says about a client, beside the name it gave itself. Every
+// part is optional because a client may have none of it, so a host that reports
+// only a session still draws a row a reader can act on.
+function clientFacts(client) {
+  const facts = [];
+  // One client opens as many connections as it has streams, and the server
+  // reports the count so a row is not read as one socket.
+  if (client.streams) facts.push(["Connections", String(client.streams)]);
+  if (client.idle_seconds !== undefined && client.idle_seconds !== null) {
+    facts.push(["Idle", `${client.idle_seconds}s`]);
+  }
+  return facts;
+}
+
+function clientDetail(client) {
+  if (client.attached) return `${client.requests || 0} calls`;
+  return client.detached_reason || "idle";
+}
+
+function clientRow(client) {
+  const card = node("article", "client-row");
+  const head = node("div", "client-row-head");
+  head.append(node("h4", "client-row-name", client.name || client.session_id));
+  head.append(node("span", "state-badge", clientDetail(client)));
+  if (client.attached) {
+    const drop = node("button", "text-button", "Disconnect");
+    drop.type = "button";
+    drop.addEventListener("click", () => disconnectClient(client.session_id));
+    head.append(drop);
+  }
+  card.append(head);
+  // The session id is how the same client is named in `clients` and in
+  // `disconnect`, so it is shown whole rather than shortened to fit a badge.
+  const facts = clientFacts(client);
+  facts.push(["Session", client.session_id || "Not reported"]);
+  card.append(factList(facts, "fact-list client-facts"));
+  return card;
+}
+
 function renderClients(clients) {
   const container = byId("client-chips");
   container.replaceChildren();
@@ -232,23 +326,7 @@ function renderClients(clients) {
     return;
   }
   for (const client of clients) {
-    const chip = node("div", "partition-chip");
-    const label = node("span", "partition-chip-label", client.name || client.session_id);
-    const detail = node(
-      "span",
-      "partition-chip-count",
-      client.attached
-        ? `${client.requests || 0} calls`
-        : client.detached_reason || "idle",
-    );
-    chip.append(label, detail);
-    if (client.attached) {
-      const drop = node("button", "text-button", "Disconnect");
-      drop.type = "button";
-      drop.addEventListener("click", () => disconnectClient(client.session_id));
-      chip.append(drop);
-    }
-    container.append(chip);
+    container.append(clientRow(client));
   }
 }
 
@@ -354,12 +432,60 @@ function renderAgentEndpoint(status) {
   byId("agent-url-copy").disabled = !url;
 }
 
+// The client entry is the server's bytes, and the copy button sends them exactly
+// as received. On screen they are indented, because a configuration pasted from
+// a wall of escaped quotes is one a reader cannot check against what it names.
+function readableEntry(entry) {
+  try {
+    return JSON.stringify(JSON.parse(entry), null, 2);
+  } catch (_error) {
+    return entry;
+  }
+}
+
 async function loadAgentEntry() {
   if (!hasCapability("agent_entry")) return;
   const payload = await api("/api/agent-entry");
   state.agentEntry = payload.entry || "";
-  byId("agent-entry").textContent = state.agentEntry;
+  byId("agent-entry").textContent = readableEntry(state.agentEntry);
   byId("agent-entry-copy").disabled = !state.agentEntry;
+}
+
+const METHOD_LABELS = { hybrid: "Hybrid", bm25: "BM25", dense: "Dense" };
+
+function methodLabels(status) {
+  return (status.available_retrieval_methods || []).map(
+    (method) => METHOD_LABELS[method] || String(method),
+  );
+}
+
+// The counts a reader needs to act are in the cards above. The rest — the
+// directory this page serves, the generation identifier in full, the methods a
+// search may ask for — is labelled and selectable behind one disclosure, because
+// it is what a reader copies into a report and it does not belong in a badge.
+function renderStatusFacts(status) {
+  const rows = [["Project directory", status.project_root || ""]];
+  if (status.source_root) rows.push(["Source directory", status.source_root]);
+  if (status.generation_id) {
+    rows.push(["Generation identifier", status.generation_id]);
+    rows.push(["Built", formatDate(status.created_at)]);
+  }
+  const methods = methodLabels(status);
+  if (methods.length) {
+    rows.push([
+      "Retrieval methods",
+      `${methods.join(", ")} (default ${status.default_retrieval_method || "bm25"})`,
+    ]);
+  }
+  rows.push([
+    "Sources on disk",
+    `${formatNumber(status.selected_source_count)} selected · ${formatNumber(
+      status.excluded_source_count,
+    )} excluded`,
+  ]);
+  const formats = status.allowed_formats || [];
+  if (formats.length) rows.push(["Accepted formats", formats.join(", ")]);
+  byId("status-facts").replaceChildren(factList(rows, "fact-list"));
 }
 
 function renderStatus(status) {
@@ -381,9 +507,13 @@ function renderStatus(status) {
     ? `${formatNumber(status.indexed_source_count)} indexed · ${formatNumber(status.excluded_source_count)} excluded`
     : `${formatNumber(status.selected_source_count)} ready to ingest · ${formatNumber(status.excluded_source_count)} excluded`;
   byId("chunk-count").textContent = status.ready ? formatNumber(status.chunk_count) : "0";
-  byId("generation-label").textContent = status.generation_id ? compactId(status.generation_id) : "None";
+  // The identifier is shown whole. It wraps rather than shortening, because the
+  // whole of it is what identifies the generation in a report.
+  byId("generation-label").textContent = status.generation_id || "None yet";
   byId("generation-label").title = status.generation_id || "";
-  byId("generation-date").textContent = formatDate(status.created_at);
+  byId("generation-date").textContent = status.created_at
+    ? `Built ${formatDate(status.created_at)}`
+    : "Not yet created";
 
   let generationAction = "Regenerate";
   if (!status.ready) generationAction = "Create generation";
@@ -402,7 +532,7 @@ function renderStatus(status) {
   else if (status.ready) indexState = "BM25 only";
   byId("index-state").textContent = indexState;
   byId("retrieval-detail").textContent = status.ready
-    ? (status.available_retrieval_methods || []).join(" · ").toUpperCase()
+    ? methodLabels(status).join(" · ") || "No method available"
     : state.profile?.source_types_label || "document sources";
 
   const notice = byId("status-notice");
@@ -434,6 +564,13 @@ function renderStatus(status) {
   } else {
     notice.hidden = true;
   }
+  // The server's own sentence about the project is always shown. It carries the
+  // sentences a card cannot, and a panel that drops it when nothing is urgent
+  // hides a warning.
+  const message = byId("status-message");
+  message.textContent = status.message || "";
+  message.hidden = !status.message;
+  renderStatusFacts(status);
   configureRetrieval(status);
   renderPartitions(status);
   renderProjectTags(status);
@@ -449,12 +586,47 @@ function tagList(values, className = "tag") {
   return fragment;
 }
 
+const FILTER_FIELDS = [
+  "category-filter",
+  "keyword-filter",
+  "category-any-filter",
+  "project-any-filter",
+  "author-filter",
+  "title-filter",
+  "language-filter",
+  "include-source-filter",
+  "exclude-source-filter",
+];
+
+// The count on the section heading and the sentence on the disclosure summary
+// are the same two facts, so both are computed here rather than in one place
+// and left to disagree with the other.
+function syncFilterSummary() {
+  const set = FILTER_FIELDS.filter((field) => listValue(byId(field).value).length);
+  byId("filter-count").textContent = String(set.length);
+  byId("filter-summary-note").textContent = set.length
+    ? `${set.length} filter${set.length === 1 ? "" : "s"} set`
+    : "No filter set";
+}
+
+// A value typed into a field the disclosure has closed is invisible, so adding a
+// value from a list opens the drawer that holds it. A reader who selected one of
+// the partitions below then sees where it went.
+function revealFilterField(field) {
+  const drawer = byId("filter-fields");
+  if (drawer && !drawer.open) drawer.open = true;
+  const group = byId(field).closest(".filter-group");
+  if (group) group.dataset.filled = "true";
+}
+
 function addSearchFilter(field, value) {
   const input = byId(field);
   if (!input || !value) return;
   const values = listValue(input.value);
   if (!values.includes(value)) values.push(value);
   input.value = values.join(", ");
+  revealFilterField(field);
+  syncFilterSummary();
   input.focus();
   toast(`Added to the search filter: ${value}`);
 }
@@ -468,14 +640,12 @@ function renderInventory(containerId, entries, key, action) {
     return;
   }
   entries.forEach((item) => {
-    const chip = button(
-      `${item[key]} · ${formatNumber(item.searchable_source_count)}`,
-      action,
-      item[key],
-      "tag tag-button",
-    );
-    chip.title = `Search ${item[key]}`;
-    container.append(chip);
+    const control = button(item[key], action, item[key], "pick-button");
+    const count = node("span", "pick-count", formatNumber(item.searchable_source_count));
+    count.append(node("span", "visually-hidden", "searchable sources"));
+    control.append(count);
+    control.title = `Search ${item[key]}`;
+    container.append(control);
   });
 }
 
@@ -775,10 +945,6 @@ function sourceCard(source) {
   body.append(titleRow);
   body.append(node("p", "source-byline", authorLine(source)));
   if (source.doi) body.append(node("p", "source-doi", `doi:${inlineText(source.doi).replace(/^doi:/i, "")}`));
-  const path = node("p", "source-path", source.source_relative_path);
-  path.title = source.source_path || source.source_relative_path;
-  body.append(path);
-  body.append(node("p", "source-id", source.source_id));
   if (
     (source.categories || []).length ||
     (source.keywords || []).length ||
@@ -790,6 +956,22 @@ function sourceCard(source) {
     tags.append(tagList(source.keywords, "tag tag-keyword"));
     body.append(tags);
   }
+  // The path and the identifier are how a reader names this source in a report
+  // and in a filter, so they are kept whole and selectable behind one labelled
+  // disclosure rather than compressed under the title.
+  const identifiers = node("details", "identifier-drawer");
+  identifiers.append(node("summary", "drawer-note", "Path and identifier"));
+  identifiers.append(factList([
+    ["Path", source.source_relative_path],
+    ["Identifier", source.source_id],
+  ], "fact-list identifier-list"));
+  if (source.source_path && source.source_path !== source.source_relative_path) {
+    identifiers.lastElementChild.append(
+      node("dt", "fact-label", "Absolute path"),
+      node("dd", "fact-value", source.source_path),
+    );
+  }
+  body.append(identifiers);
 
   const actions = node("div", "source-card-actions");
   if (hasCapability("source_files")) {
@@ -819,7 +1001,7 @@ function excludedCard(source) {
     : source.indexed_in_current_generation
       ? "Blocked from current search"
       : "Not in current index";
-  body.append(node("span", "state-badge", status));
+  body.append(node("span", "state-badge state-badge-blocked", status));
   card.append(body);
   if (hasCapability("source_inclusion")) {
     card.append(button("Restore source", "restore-source", source.source_relative_path));
@@ -908,7 +1090,8 @@ async function loadWorkspace({ announce = false } = {}) {
   }
 }
 
-function switchView(name) {
+function switchView(name, { moveFocus = false } = {}) {
+  let opened = null;
   document.querySelectorAll(".sidebar-item").forEach((item) => {
     const active = item.dataset.view === name;
     item.classList.toggle("is-active", active);
@@ -922,7 +1105,16 @@ function switchView(name) {
     const active = panel.dataset.panel === name;
     panel.classList.toggle("is-active", active);
     panel.hidden = !active;
+    // The panel is given a focus stop of its own so a keyboard reader who chose
+    // a view lands on that view rather than on the sidebar they just left. The
+    // stop is added only on a deliberate choice, so the first render does not
+    // take the focus from wherever the page was opened.
+    if (active && moveFocus) {
+      panel.tabIndex = -1;
+      opened = panel;
+    }
   });
+  if (opened) opened.focus({ preventScroll: true });
   closeNav();
 }
 
@@ -954,10 +1146,12 @@ function toggleNav() {
   byId("workspace-nav").querySelector(".nav-item")?.focus();
 }
 
-function scoreLabel(label, value) {
+// A score is a pair, because the two halves of one are a name and a number and
+// neither reads beside the other: a bare 0.0321 is the fusion score to one reader
+// and the cosine to another.
+function scorePair(label, value) {
   if (value === null || value === undefined) return null;
-  const shown = typeof value === "number" && !Number.isInteger(value) ? value.toFixed(4) : value;
-  return node("span", "score-label", `${label} ${shown}`);
+  return [label, String(value)];
 }
 
 function resultCard(hit) {
@@ -998,19 +1192,29 @@ function resultCard(hit) {
   }
   footer.append(actions);
 
-  const scores = node("div", "score-row");
-  [
-    scoreLabel("BM25 #", hit.component_ranks?.bm25),
-    scoreLabel("Dense #", hit.component_ranks?.dense),
-    scoreLabel("Cosine", hit.component_scores?.dense_cosine_similarity),
-    scoreLabel("RRF", hit.fusion_score),
-    scoreLabel("Rerank", hit.rerank_score),
-  ].filter(Boolean).forEach((item) => scores.append(item));
-  const chunk = node("span", "score-label", compactId(hit.chunk_id));
-  chunk.title = hit.chunk_id;
-  scores.append(chunk);
-  footer.append(scores);
   content.append(footer);
+
+  // The rank each component gave this passage and the passage identifier are
+  // what a reader checks when a result looks wrong, and they are not what a
+  // reader scans the list for. They are labelled, full, and selectable here
+  // rather than compressed into a row of separators under every card.
+  const scores = [
+    scorePair("BM25 rank", hit.component_ranks?.bm25),
+    scorePair("Dense rank", hit.component_ranks?.dense),
+    scorePair("Cosine", hit.component_scores?.dense_cosine_similarity),
+    scorePair("Fusion score", hit.fusion_score),
+    scorePair("Rerank score", hit.rerank_score),
+  ].filter(Boolean);
+  const details = node("details", "identifier-drawer");
+  const summary = node("summary", "drawer-note", "Scores and identifiers");
+  summary.append(node("span", "count-badge", String(scores.length)));
+  details.append(summary);
+  const rows = scores.map(([label, value]) => [label, value]);
+  rows.push(["Passage identifier", hit.chunk_id]);
+  if (hit.document_id) rows.push(["Source identifier", hit.document_id]);
+  if (hit.source_path) rows.push(["Path", hit.source_path]);
+  details.append(factList(rows, "fact-list score-facts"));
+  content.append(details);
   card.append(content);
   return card;
 }
@@ -1106,13 +1310,34 @@ async function showContext(chunkId) {
     const container = byId("context-content");
     container.replaceChildren();
     (payload.context || []).forEach((passage) => {
-      const item = node("article", `context-passage${passage.chunk_id === payload.requested_chunk_id ? " is-requested" : ""}`);
+      const requested = passage.chunk_id === payload.requested_chunk_id;
+      // The server marks a neighbour it left out of the corpus, so the dialog
+      // says so rather than letting a passage that no query returns sit in a
+      // list of search hits.
+      const excluded = passage.excluded_from_search === true;
+      const item = node(
+        "article",
+        `context-passage${requested ? " is-requested" : ""}${excluded ? " context-excluded" : ""}`,
+      );
       const citation = node("div", "context-citation");
       citation.append(node("span", "", inlineText(passage.citation)));
       citation.append(node("span", "locator-badge", locatorLabel(passage.locator)));
-      item.append(citation, node("p", "", readableText(passage.text)));
-      if (hasCapability("chunk_exclusion")) {
-        item.append(chunkAction(passage));
+      item.append(citation);
+      if (excluded) {
+        item.append(
+          node(
+            "p",
+            "context-excluded-warning",
+            "Excluded from search. This passage is beside the one you asked for, and no query returns it.",
+          ),
+        );
+      }
+      item.append(node("p", "", readableText(passage.text)));
+      if (hasCapability("chunk_exclusion") && !excluded) {
+        // Changing what a search reads stays a deliberate step taken in the
+        // dialog. A passage already excluded is offered nothing here, because
+        // restoring it belongs to the list that owns the exclusions.
+        item.append(chunkExcludeButton(passage));
       }
       container.append(item);
     });
@@ -1162,38 +1387,58 @@ function bytes(count) {
   return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
 }
 
+function generationRow(generation) {
+  const row = node("article", "record-row");
+  const head = node("div", "record-row-head");
+  head.append(node("code", "record-id", generation.generation_id));
+  if (generation.is_current) {
+    head.append(node("span", "state-badge state-badge-current", "In use"));
+  } else {
+    head.append(node("span", "state-badge", "Retained"));
+  }
+  row.append(head);
+  // Every number here is a fact about what a build kept, and none of them is a
+  // headline: the identifier above is what identifies the generation.
+  const facts = [
+    ["Built", generation.created_at ? formatDate(generation.created_at) : "Unknown"],
+    ["Passages", formatNumber(generation.chunk_count ?? 0)],
+    ["Sources", formatNumber(generation.document_count ?? 0)],
+    ["Size on disk", bytes(generation.size_bytes)],
+  ];
+  if (generation.file_count) facts.push(["Files", formatNumber(generation.file_count)]);
+  if (generation.schema_version) facts.push(["Schema", String(generation.schema_version)]);
+  row.append(factList(facts, "fact-list"));
+  // A generation whose manifest cannot be read is named where the reader can act
+  // on it, never folded into a count.
+  if (generation.manifest_error) {
+    row.append(node("p", "record-warning", `Manifest unreadable: ${generation.manifest_error}`));
+  }
+  // The one a search reads cannot be removed, so the action is not offered
+  // rather than offered and refused: a button that always fails is a button
+  // that teaches a reader to click through the answers. It sits beside the
+  // identifier because that is what it acts on.
+  if (!generation.is_current) {
+    const drop = node("button", "text-button", "Remove");
+    drop.type = "button";
+    drop.addEventListener("click", () => openGenerationRemoval(generation.generation_id));
+    head.append(drop);
+  }
+  return row;
+}
+
 function renderGenerations(generations) {
+  // The id stays the container hook other code already reads; the contents are
+  // rows rather than chips, because an identifier and a size do not belong in a
+  // badge.
   const container = byId("generation-chips");
   container.replaceChildren();
+  byId("generation-count").textContent = formatNumber(generations.length);
   if (!generations.length) {
     container.append(node("p", "form-note", "This project has no build yet."));
     return;
   }
   for (const generation of generations) {
-    const chip = node("div", "partition-chip");
-    chip.append(
-      node("span", "partition-chip-label", generation.generation_id),
-      node(
-        "span",
-        "partition-chip-count",
-        generation.is_current
-          ? "in use"
-          : `${bytes(generation.size_bytes)} · ${generation.chunk_count} passages`,
-      ),
-    );
-    // The one a search reads cannot be removed, so the action is not offered
-    // rather than offered and refused: a button that always fails is a button
-    // that teaches a reader to click through the answers.
-    if (!generation.is_current) {
-      const drop = node("button", "text-button", "Remove");
-      drop.type = "button";
-      drop.addEventListener("click", () => openGenerationRemoval(generation.generation_id));
-      chip.append(drop);
-    }
-    if (generation.manifest_error) {
-      chip.append(node("span", "partition-chip-count", "manifest unreadable"));
-    }
-    container.append(chip);
+    container.append(generationRow(generation));
   }
 }
 
@@ -1985,7 +2230,7 @@ function initialize() {
   state.hits = new Map();
   document.querySelectorAll(".sidebar-item").forEach((item) => {
     item.querySelector(".nav-item")?.addEventListener("click", () => {
-      switchView(item.dataset.view);
+      switchView(item.dataset.view, { moveFocus: true });
     });
   });
   byId("nav-toggle").addEventListener("click", toggleNav);
@@ -2021,6 +2266,13 @@ function initialize() {
   byId("source-list").addEventListener("click", handleAction);
   byId("partition-chips").addEventListener("click", handleAction);
   byId("project-chips").addEventListener("click", handleAction);
+  // The language list fills the language box beside it, so selecting from it is
+  // a filter action like every other one.
+  byId("language-chips").addEventListener("click", handleAction);
+  FILTER_FIELDS.forEach((field) => {
+    byId(field).addEventListener("input", syncFilterSummary);
+  });
+  syncFilterSummary();
   byId("excluded-list").addEventListener("click", handleAction);
   byId("generation-form").addEventListener("submit", removeGeneration);
   byId("generation-confirm").addEventListener("input", (event) => {

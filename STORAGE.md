@@ -2,7 +2,7 @@
 
 The on-disk format: every directory, file, column, and field name. The only document that defines a field name.
 
-- The format is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because that product reads and writes the same files.
+- The format is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because the memory server reads and writes the same files.
   - A change may add to the format, but no change may rename a path or a column.
   - `AGENTS.md` states the rule and `tests/test_compatibility.py` pins the values.
 
@@ -28,7 +28,7 @@ The on-disk format: every directory, file, column, and field name. The only docu
 | model cache | `runtime.model_cache_root`, then `$MEMORY_ULTRARAG_MODEL_CACHE_ROOT` | `platformdirs.user_cache_path("memory-ultra-rag-mcp")/models` |
 | project record | — | `platformdirs.user_config_path("memory-ultra-rag-mcp")/projects.json` |
 
-The settings directory, the environment prefix, the model cache, and the scope directory names keep the names the frozen product looks up. `AGENTS.md` says why each one is load-bearing.
+The settings directory, the environment prefix, the model cache, and the scope directory names keep the names the installed server looks up. `AGENTS.md` says why each one is load-bearing.
 
 ## A project's directory
 
@@ -46,7 +46,7 @@ The settings directory, the environment prefix, the model cache, and the scope d
 - `open-memory-rag-ui.sh` is a symlink, is machine-local, and holds nothing of yours.
   - It is the only file this product writes at a project's root.
   - It carries the product's own name, so two products serving one repository cannot stop each other.
-- `project.json` is additive, and the frozen product reads nothing from this directory but `memory.sqlite3`, so a field added here is invisible to it.
+- `project.json` is additive, and the installed server reads nothing from this directory but `memory.sqlite3`, so a field added here is invisible to it.
 
 ```json
 {
@@ -59,7 +59,7 @@ The settings directory, the environment prefix, the model cache, and the scope d
 }
 ```
 
-- `project_id` is derived from the project's resolved path, so the same project initialised on two machines gets the same id on both.
+- `project_id` is a digest of the project's resolved path, and a descriptor that already holds one keeps it. Two machines whose checkout sits at different paths therefore get different ids, and `AGENTS.md` says why the recorded name is what travels.
 
 ## The project record
 
@@ -79,8 +79,7 @@ The settings directory, the environment prefix, the model cache, and the scope d
 }
 ```
 
-- It holds an id, a name, and a root, and nothing a memory owns.
-  - Deleting an entry is how a project is unregistered, and nothing has to be rebuilt.
+- It holds an id, a name, and a root, and nothing a memory owns. Deleting an entry is how a project is unregistered; `AGENTS.md` says why it is a pointer and not a state cache.
 - A record whose project directory has gone is still answerable, and `projects` reports it as having no descriptor.
 - Writes are atomic: a temporary file beside it, then a rename, so a reader never sees half a record.
 
@@ -100,8 +99,7 @@ Every name carries `memory-rag`, so this product's runtime and another product's
 
 - The launcher is a generated POSIX script that owns the free-port choice, the lock that makes that choice exclusive, the pid and port files, and the log.
   - Its first line names the version that wrote it, so a template change rewrites it rather than leaving an older command in place.
-- A recorded pid is believed only when the process it names still identifies itself as this app's own.
-  - A pid file outlives its process and the number is reused, so a start that trusted the number would refuse to start, and a stop that trusted it would signal whatever the machine ran next.
+- `memory-rag.pid` is believed only when the process it names still identifies itself as this app's own. `AGENTS.md` says why a pid number alone is not enough.
 
 ## The record
 
@@ -142,8 +140,7 @@ Every column earns its place by naming its reader:
 | `added_at` | the recency bonus, and the date a caller is told |
 | `recalls` | how often the memory has handed the statement back, which a caller judges by |
 
-- `unit` is an FTS5 virtual table, so the words that find a statement and the statement itself are the same rows, and a hand edit to `unit.text` cannot put the word index out of step with the record.
-  - The one thing an edit can leave behind is a `vector` describing text the statement no longer holds.
+- `unit` is an FTS5 virtual table, so the words that find a statement and the statement itself are the same rows, and a hand edit to `unit.text` cannot put the word index out of step with the record. `AGENTS.md` says what an edit can still leave behind.
 - `index.sqlite3` and `index-vectors.sqlite3` are older files.
   - They are read once, for what they hold, and then removed, and the answer says how many were found.
 
@@ -152,19 +149,14 @@ Every column earns its place by naming its reader:
 `MEMORY.md`, written from the record and never read back as memory.
 
 - The statement is newest at the top.
-- The document is prose under a heading, with no kind and no date in each line, because that is what the frozen product's parser reads. Both are columns of the row, and a file that carried them in its text would be a file of data rather than something a person wrote.
+- The document is prose under a heading, with no kind and no date in each line, because that is what the installed server's parser reads. Both are columns of the row, and a file that carried them in its text would be a file of data rather than something a person wrote.
 - A file beside the record is read exactly once, and only ever read.
-  - A record with nothing in it adopts a document left by an earlier version, which is how such a memory is recovered.
+  - Legacy document recovery applies only to an uninitialized record, not one deliberately emptied by deleting or forgetting statements.
+  - Commit imported statements before removing a superseded file; a failed commit leaves the source intact.
   - Anything the document still holds that the record lacks is imported and then removed.
 
 ## Durability
 
-- A write reaches the `unit` table and is committed before anything derived from it is touched, and never fails because the lookup layer is unavailable.
-  - The rendering and the vectors follow the record, never the other way round.
-- A statement with no vector is pending, not lost.
-  - A read says so, and the worker embeds it when a model is available.
-  - A missing model costs one retry per interval rather than a core, and the next write or an explicit `reindex` clears the wait.
-- A write drops the vectors of statements the record no longer holds, and answers with the count as `vectors_removed`.
-  - A statement is known by a digest of its words, so a reworded statement is a new `unit_key` and the vector filed under the old one describes text that is gone.
-  - The drop is a set difference over `unit_key` taken inside the connection the write already holds, so it costs no second open of the file.
-  - A vector is never the record, and losing one costs a re-embedding rather than a statement.
+- A write reaches the `unit` table and is committed before anything derived from it is touched. The rendering and the vectors follow the record, never the other way round.
+- A statement with no vector is pending, not lost: a read says so, and the worker embeds it when a model is available. A missing model costs one retry per interval, and the next write or an explicit `reindex` clears the wait.
+- A write that drops the vectors of statements the record no longer holds answers with the count as `vectors_removed`. A vector is never the record, and losing one costs a re-embedding rather than a statement. `AGENTS.md` says why the drop happens on the write.

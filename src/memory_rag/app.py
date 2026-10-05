@@ -33,6 +33,8 @@ from starlette.types import Receive, Scope, Send
 
 from .config import ConfigurationError
 from .service import MemoryService
+from .surfaces.workspace.write_guard import LOOPBACK_NAMES as LOOPBACK_HOSTNAMES
+from .surfaces.workspace.write_guard import host_names_this_app
 
 LOGGER = logging.getLogger(__name__)
 
@@ -533,6 +535,12 @@ async def _security_headers(
     headers are the second half of that, not the first.
     """
 
+    from .surfaces.workspace.write_guard import served_authority
+
+    if served_authority(request) is None:
+        return JSONResponse(
+            {"error": "Requests require a loopback Host"}, status_code=403
+        )
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -572,6 +580,7 @@ __all__ = [
     "CLIENT_IDLE_SECONDS",
     "CLIENT_NAME_HEADER",
     "CONTROL_PREFIX",
+    "LOOPBACK_HOSTNAMES",
     "PID_FILE",
     "PORT_FILE",
     "UI_HOST",
@@ -582,5 +591,6 @@ __all__ = [
     "ClientRegistry",
     "Surfaces",
     "alive",
+    "host_names_this_app",
     "running",
 ]

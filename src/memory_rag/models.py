@@ -282,13 +282,7 @@ class LocalEmbedder:
 
 
 class LocalReranker:
-    """A local cross-encoder, for ordering candidates on a read.
-
-    Off by default. It is the largest ordering gain measured anywhere in this
-    collection, and a small model makes it affordable on a blocking read, but it
-    was measured on long passages rather than one-line units, and nothing in
-    this package may claim a gain it has not measured.
-    """
+    """Local cross-encoder for recall; quality on memory statements is unmeasured."""
 
     def __init__(self, model: str, cache: Path | None = None) -> None:
         spec = RERANKER_MODELS.get(model)

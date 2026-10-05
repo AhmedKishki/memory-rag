@@ -58,8 +58,10 @@ def test_a_statement_carrying_a_date_is_refused(statement: str) -> None:
     "statement",
     [
         HOLDS,
-        "In Corvellec (ed), *Waste as a Critique* (OUP 2025), each essay is mapped "
-        "only when it is needed.",
+        (
+            "In Corvellec (ed), *Waste as a Critique* (OUP 2025), each essay is mapped "
+            "only when it is needed."
+        ),
         "The corpus holds 101 files, of which 91 are indexed.",
         "Keep the submodule pointer at the revision that shipped.",
         "Section 4 keeps Marx's categories as supporting vocabulary under Gidwani.",
@@ -205,7 +207,9 @@ async def test_a_write_drops_the_vectors_of_statements_it_no_longer_holds(
         assert store.count() == 0
 
 
-async def test_a_settle_says_how_many_vectors_it_dropped(service: MemoryService) -> None:
+async def test_a_settle_says_how_many_vectors_it_dropped(
+    service: MemoryService,
+) -> None:
     """An operator repairing a memory has to be able to account for what it removed."""
 
     orphan = unit_key("RULE: something the record no longer holds")
@@ -233,7 +237,7 @@ def test_the_packaged_default_agrees_with_the_code() -> None:
 
     from memory_rag import settings as settings_module
 
-    packaged = (
-        Path(settings_module.__file__).parent / "default.toml"
-    ).read_text(encoding="utf-8")
+    packaged = (Path(settings_module.__file__).parent / "default.toml").read_text(
+        encoding="utf-8"
+    )
     assert "duplicate_cosine = 0.85" in packaged

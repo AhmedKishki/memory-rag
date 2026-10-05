@@ -23,7 +23,7 @@ import pytest
 from memory_rag import index, store
 from memory_rag.config import GLOBAL_MEMORY_DIRNAME, GLOBAL_SCOPE_DIRECTORY
 from memory_rag.config import LOCAL_STATE_DIRNAME as CONFIG_LOCAL_DIRNAME
-from memory_rag.index import INDEX_FILENAME, SCHEMA_VERSION
+from memory_rag.index import INDEX_FILENAME, SCHEMA_VERSION, MemoryIndex
 from memory_rag.settings import (
     PROJECT_CONFIG_RELATIVE,
     SETTINGS,
@@ -229,3 +229,68 @@ def test_the_contract_is_stated_where_a_change_will_be_looked_for(
 
 def test_the_frozen_revision_this_contract_refers_to_is_a_full_commit() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", FROZEN_REVISION), FROZEN_REVISION
+
+
+def test_the_last_forgotten_statement_stays_forgotten_with_a_stale_rendering(
+    tmp_path: Path,
+) -> None:
+    """Both products read this record, so neither may bring a forgotten statement back.
+
+    The rendering is written from the record and is not rewritten by a removal, so
+    after the last statement is forgotten the file still names it. Recovery from a
+    rendering is how a memory written by an earlier version is read, and the condition
+    has to be a record that has never held a statement rather than one that holds none:
+    the two are different states, and reading the file in the second one returns what
+    the caller just asked to forget. Here the two happen inside one process, which is
+    what this product does — a long-lived app records and forgets without restarting —
+    so a test that opened a second record would not have found it.
+    """
+
+    from fakes import FakeEmbedder
+
+    from memory_rag.retrieval import Retrieval, RetrievalSettings
+
+    directory = tmp_path / "scope"
+    directory.mkdir()
+    engine = Retrieval(
+        embedder=FakeEmbedder(), policy=RetrievalSettings.from_settings(None)
+    )
+    try:
+        engine.record(
+            content="the ledger is reconciled at the end of the month",
+            directory=directory,
+            kind="RULE",
+        )
+        engine.answer(
+            scope="local",
+            directory=directory,
+            query="the ledger is reconciled",
+            limit=5,
+        )
+        # The rendering is asked for once, and the removal below does not rewrite it,
+        # so the file is left naming a statement the record no longer holds.
+        index_path = directory / INDEX_FILENAME
+        assert index_path.is_file()
+        (directory / "MEMORY.md").write_text(
+            "# MEMORY\n\nthe ledger is reconciled at the end of the month\n",
+            encoding="utf-8",
+        )
+        answer = engine.forget(
+            text="the ledger is reconciled at the end of the month",
+            directories={"local": directory},
+        )
+        assert answer["status"] == "forgotten"
+
+        with MemoryIndex(directory) as reader:
+            assert reader.statements() == []
+
+        read = engine.answer(
+            scope="local", directory=directory, query="ledger reconciled", limit=5
+        )
+        assert read["units"] == [], "the read returned a statement that was forgotten"
+        with MemoryIndex(directory) as reader:
+            assert reader.statements() == [], (
+                "the rendering was read back into the record"
+            )
+    finally:
+        engine.close()

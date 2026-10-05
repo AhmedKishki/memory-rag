@@ -13,12 +13,12 @@ machine where that project was initialised. The resolution belongs to this
 installation's own record, so the bridge asks the record for the directory and refuses
 to accept one itself.
 
-A project that this machine has not initialised is answered, not refused: the
-connection is established, `recall_memory` reports that the name resolves to nothing
-here, and the answer carries the command that creates the project. That is a
-declaration about a machine, not a refusal to speak, because an agent that gets a
-connection error has nothing to report to the user and a client entry that would have
-to be edited afterwards is a client entry that will not be edited.
+A project that this machine has not initialised, and a project the running app is not
+serving, are both reported rather than proxied. The app holds every project's memory
+and the tools take no project argument, so the one project a statement lands in is the
+one the app was started for. A client whose entry names another project would be
+answered out of a repository it did not ask about, so the bridge stops and names the
+command that starts the app for the project it was configured with.
 
 The bridge names itself, so a disconnect is legible: the app lists clients by name, and
 dropping one ends its session, which ends the pipe and therefore the client.
@@ -27,6 +27,8 @@ dropping one ends its session, which ends the pipe and therefore the client.
 from __future__ import annotations
 
 import os
+import shlex
+import sys
 from typing import Any
 
 from fastmcp.client.transports import StreamableHttpTransport
@@ -105,20 +107,74 @@ def agent_url(control: Control) -> str:
     return reported or f"{control.base_url}{MCP_PATH}"
 
 
+def serving_project(control: Control) -> dict[str, str | None]:
+    """Return what the running app says it is serving, as a name and a root.
+
+    The app is asked rather than inferred from its project list, because the answer is
+    which project it treats as the current one and only the app knows that. The root is
+    what a caller's own resolved project is compared against, because a name is spelled
+    by a human and the same project is spelled differently in two client entries. An app
+    that cannot be asked is answered with neither, which the caller treats as a reason to
+    stop rather than as permission.
+    """
+
+    try:
+        status = control.status()
+    except ControlError:
+        return {"name": None, "root": None}
+    name = status.get("active_project")
+    root = status.get("active_project_root")
+    return {"name": str(name) if name else None, "root": str(root) if root else None}
+
+
 def run(
     project_name: str | None = None,
     *,
     account: AccountConfig | None = None,
     storage_root: str | None = None,
 ) -> int:
-    """Serve this account's memory to one stdio client, until the client stops."""
+    """Serve this account's memory to one stdio client, until the client stops.
+
+    A project the caller named is checked against this machine's record and against the
+    running app before the pipe is proxied, because the tools take no project argument
+    and the app's own choice is the one that decides where a statement lands.
+
+    A refusal goes to stderr, never to stdout: stdout is the protocol, and a line of
+    diagnostics on it is a frame an agent client reads as a message from this server.
+    """
 
     resolved = account or resolve_account(storage_root)
+    wanted = str(project_name or "").strip()
+    project = resolve_project_name(wanted, resolved) if wanted else None
+    if wanted and project is None:
+        print(
+            f"memory-rag: no project called {wanted!r} is recorded on this machine, so "
+            "this client has no memory to work in. Run 'memory-rag init --project-root "
+            f"<path> --name {shlex.quote(wanted)}' for it, then start the app for it "
+            f"with 'memory-rag --project {shlex.quote(wanted)} start'.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
     try:
         control = ensure_running(resolved.storage_root)
     except ControlError as error:
-        print(f"memory-rag: {error}", flush=True)
+        print(f"memory-rag: {error}", file=sys.stderr, flush=True)
         return 1
+    if project is not None:
+        served = serving_project(control)
+        if served["root"] is None or served["root"] != str(project.project_root):
+            print(
+                f"memory-rag: the app is serving {served['name'] or 'no project'} while "
+                f"this client is configured for {wanted}, and the tools take no project "
+                "argument, so a statement recorded now would be filed in the wrong "
+                f"repository. Restart the app for it: 'memory-rag --project "
+                f"{shlex.quote(wanted)} stop' then 'memory-rag --project "
+                f"{shlex.quote(wanted)} start'.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
     proxy = build_proxy(agent_url(control), name=client_name())
     proxy.run(transport="stdio", show_banner=False)
     return 0
@@ -139,4 +195,5 @@ __all__ = [
     "main",
     "resolve_project_name",
     "run",
+    "serving_project",
 ]

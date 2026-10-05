@@ -48,6 +48,11 @@ def select_projects(
     is the one the caller named. Naming a project this installation has not recorded is
     refused here rather than at first use, because a session that files a rule about one
     repository into another one is worse than a session that does not start.
+
+    The rest of the record follows the named project, with the named project left out.
+    It is left out by what it holds rather than by which object it is, because a lookup
+    builds its own copy of the entry it found: comparing objects would keep the copy as
+    well, and a project listed twice is one memory searched twice and reported twice.
     """
 
     from .registry import RegistryError, resolve
@@ -57,7 +62,7 @@ def select_projects(
         wanted = Path(project_root).expanduser().resolve()
         for project in known:
             if project.project_root == wanted:
-                return [project, *[item for item in known if item is not project]]
+                return [project, *[item for item in known if item != project]]
         raise RegistryError(
             f"{wanted} is not a project this installation has recorded. Run "
             "'memory-rag init --project-root <path> --name <name>' for it first; a "
@@ -66,7 +71,7 @@ def select_projects(
         )
     if project_name is not None:
         chosen = resolve(project_name)
-        return [chosen, *[item for item in known if item is not chosen]]
+        return [chosen, *[item for item in known if item != chosen]]
     return known
 
 

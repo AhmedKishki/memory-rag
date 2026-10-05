@@ -1,133 +1,105 @@
-# AGENTS.md
+---
+name: AGENTS.md
+description: Memory app boundaries, shared-storage compatibility, and contribution rules.
+---
 
-Rules a change to this product has to be argued against: what the product is, what must not move, and where each kind of fact is written.
+# Memory app rules
 
 ## What this project is
 
-- One process holds an account's global memory and every project's local memory, and serves three front ends from one loopback port: a browser workspace, an agent surface of one tool per kind, and a command line.
-- The tools are the whole of what an agent may do to a memory. Everything else belongs to the command center.
-- The engine is the memory server's own code, byte for byte, and the on-disk layout is frozen while that server is installed.
-- The change this product makes is to what a memory is for — a place a person manages, not only a place an agent writes — and not to what a memory is.
+- One account-wide process serves global and registered-project memories over one loopback port.
+  - Browser, CLI, and MCP use the same service; agents get only memory tools.
+- Ship this app's engine and workspace here, independently of the stdio server.
+  - Preserve their shared storage contract, not identical source code.
+- Preserve UltraRAG attribution, licences, `NOTICE`, and the independent-project disclaimer.
 
 ## Documentation responsibilities
 
-- One home per fact, or the two homes will disagree:
-  - `README.md` holds the user manual: installing, the first command, every command, and the limits.
-  - `STORAGE.md` holds the state format: every directory, file, column, and field name.
-  - `AGENTS.md` holds these rules.
-  - A module's own docstring holds why that module does what it does, and what it may never do.
-- A module's docstring is load-bearing rather than decorative. A rule stated in two places will be found disagreeing with itself, and the disagreement will be settled by whichever copy a reader happened to open.
-- Markdown describes the present, so it carries no review log, finding list, change history, before-and-after narrative, or recorded decision.
-  - A finished item leaves no trace except the code and the commit.
-  - The words "previously", "used to", "was", and "before this change" do not appear in it.
-- Cross-references name a file by path, never a section number.
-- Every sentence is direct: one fact per sentence, no filler, no selling, and no title restated as its own first sentence.
+- Give each fact one owner:
+  - `README.md`: installation, commands, usage, and limits.
+  - `STORAGE.md`: directories, files, columns, and fields.
+  - `AGENTS.md`: engineering rules.
+  - Module docstrings: local mechanisms and boundaries.
+- Document current state, not review logs, completed work, or superseded decisions; Git retains history.
+- Reference file paths, not section numbers.
+- Write one fact per sentence, without filler, sales language, or repeated headings.
 
 ## Rules
 
 ### The contract a reader relies on
 
-- The tools are the whole agent surface.
-  - A tool that is not memory would be a feature this product does not own.
-  - A tool that edits a record by hand is a second writer beside the one that maintains it.
-- Every kind has its own recording tool and its own recall tool, so the kind is named by the tool rather than passed to one.
-  - There is no `kind` argument and no default kind. A caller chooses a kind by choosing a tool, and a statement filed under a kind nothing interprets is a category a later recall cannot ask for.
-  - The tools are declared from `store.KINDS` in a loop rather than written out one by one, so a kind's summary and the tool offering it are one fact in one place.
-  - `tests/test_architecture.py` builds the server and asks it what it offers, rather than grepping the source, because a tool declared in a loop is invisible to a grep.
-  - Two tools sit beside the per-kind ones and are not kinds: `recall_memory` answers across every kind, because an agent asking about a subject does not know which kind filed it and should not have to guess; and `forget_memory` removes a statement by its exact text, because a statement that stopped being true is removed whatever kind filed it.
-- A kind decides its own behaviour, and that is the reason for the split.
-  - `PERSONALITY` and `PREFERENCE` take no scope argument: what is true of the user is true of them in every project, and filing it in one would be filing a statement that is wrong everywhere else.
-  - `HANDOFF` takes no scope argument and holds one statement, replacing the last, so a project holds a handoff rather than a list of them.
-  - Every other kind takes the caller's choice of memory.
-  - A tool that shows a choice and then makes it for the caller is a tool the caller has to learn the hard way, so a kind whose memory is fixed does not take the argument at all.
-- The set of kinds is closed on a write and open on a read.
-  - A word outside `store.KINDS` is refused by name, with the kinds named beside it.
-  - A read stays permissive, because a record may already hold a kind this set does not name — written by an earlier version, or by the product this one replaces — and a recall that refused to search it would make those statements unreadable rather than tidy.
-  - `store.DEFAULT_KIND` is `ITEM` and is not in the set: a document from an earlier version carries no kind at all, so importing one has to file its statements under something, and the frozen product's parser reads a kindless line as `ITEM`. It is reachable from an import and from nothing else.
-- A statement states what holds, and carries no date or time.
-  - The record dates every statement in `added_at`, and a read reports that date, so a statement repeating it says the same thing twice.
-  - `store.admission_failure` refuses one, and it judges the statement's own words, so the same text is admitted or refused every time rather than depending on what has been embedded.
-  - A statement's identity is a digest of its words, and the date is the token that differs between two accounts of one event, so without this rule one approval recorded per session becomes one statement per session.
-  - A year on its own is not a date, because naming the edition meant still holds next year.
-  - The refusal names `record_memory_handoff`, because a statement about what was done is not a bad statement: it is a handoff, and `HANDOFF` is the kind that holds one.
-- Nothing is refused for being similar to what is already there.
-  - A write does not wait for a vector, so judging it by meaning would judge the same statement differently depending on what had been embedded.
-  - The repetition is resolved in the read, over the whole answer, where it collapses rather than refuses.
-- The account's global memory and each project's local memory are the only two kinds.
-  - Global memory is one per account and has no user dimension: no tool, page, or argument takes a user identifier.
-- A project's local memory lives inside its repository under `.memory-rag` and never leaves it. Nothing in this product copies a statement out of a project's directory.
-- The record is the record. `MEMORY.md` is a rendering, written from the record and never read back as memory.
-  - A page that edits the rendering is refused, and told where to edit the record instead.
-- The tools take no project argument.
-  - The session that records a rule is working in one repository, and a statement filed into another is a statement that is wrong everywhere else.
-- An answer carries a field when the field has news, and nothing else.
-- A write is durable before derived, and never fails because the lookup layer is unavailable.
-  - A missing model leaves statements pending rather than lost, the read says so, and the worker embeds them when a model is available.
-  - A missing model costs one retry per interval rather than a core, and the next write or an explicit `reindex` clears the wait.
-- A write drops the vectors of statements the record no longer holds, and says how many.
-  - A statement is known by a digest of its words, so a reworded statement is a new identity and the vector of the old one describes text that is gone.
-  - A live memory held 35 vectors for 23 statements, because only `forget` and `replace_all` collected them and an ordinary write did not.
-  - `MemoryIndex.collect_vectors` runs inside the connection the write already holds, so it is a set difference over keys rather than a second open.
+- Generate per-kind record and recall tools from `store.KINDS`, without a `kind` argument or default kind.
+  - `tests/test_architecture.py` inspects registered tools at runtime, not by source grep.
+  - `recall_memory` searches all kinds; `forget_memory` requires exact text.
+  - No non-memory tools or agent-side hand editing.
+- Kind-specific scope rules:
+  - `PERSONALITY` and `PREFERENCE`: global, without a scope argument.
+  - `HANDOFF`: one local statement, replacing the previous handoff, without a scope argument.
+  - Other kinds: caller-selected local or global memory.
+- Reject unknown kinds on writes, naming allowed kinds; keep reads permissive for existing records.
+  - Kindless legacy imports use `store.DEFAULT_KIND = ITEM`, never new tool writes.
+- Statements describe standing facts, not dates or times; `added_at` records the date separately.
+  - `store.admission_failure` judges text deterministically, never embeddings.
+  - A standalone year is allowed; dated updates receive a `record_memory_handoff` remedy.
+- Do not reject writes for similarity or wait for vectors; collapse repetition across the merged recall answer.
+- Global memory is account-wide, with no user identifier in tools, pages, or arguments.
+- Local memory stays under the project's `.memory-rag`; never copy it out.
+- `MEMORY.md` is a rendering, not authoritative memory or an editable page.
+  - Refuse page edits and direct the reader to the record; legacy recovery is defined in `STORAGE.md`.
+- Tools take no project argument and must not file local statements in another project's memory.
+- Emit only actionable or explanatory response fields.
+- Commit statements before derived work; lookup/model failure must not lose or fail a write.
+  - Disclose pending statements; retry missing models once per interval, reset by a write or `reindex`.
+- Remove obsolete vectors after writes and report the count.
+  - `MemoryIndex.collect_vectors` uses the write's existing connection.
 - Reranking is not optional and no setting turns it off.
 - The semantic side is unmeasured. No document may claim a quality gain from it.
 
 ### The state a reader must be able to trust
 
-- One app per account, in one process, holding one set of memories.
-  - Two apps over one account would each hold their own copy of every memory and neither would know.
-- Every path this product writes inside a project carries `memory-rag`, so two products serving one repository cannot stop each other or read each other's runtime.
-- These four names keep what the frozen server looks up: the account's settings directory, `memory-ultra-rag-mcp`; the `MEMORY_ULTRARAG_*` environment prefix; the model cache; and the scope directory names.
-  - Renaming any of them strands every existing memory and forces a silent model re-download, and `tests/test_registry.py` and `tests/test_documentation.py` state each one and fail if it moves.
-- The on-disk contract is frozen for as long as `memory-ultra-rag-mcp-server` is installed, because that server reads and writes the same files.
+- Run one app per account; namespace project runtime paths with `memory-rag`.
+- Preserve the shared settings directory `memory-ultra-rag-mcp`, `MEMORY_ULTRARAG_*` prefix, model cache, and scope names.
+  - `tests/test_registry.py` and `tests/test_documentation.py` pin these names.
+- The shared on-disk contract is frozen while `memory-ultra-rag-mcp-server` is installed.
   - The record is `memory.sqlite3`, under `<project-root>/.memory-rag/` and `<storage-root>/memory/default/`.
   - Its schema version is `8`.
-  - The statement table is an FTS5 table, so the word index and the record are the same rows.
-  - The vector table's columns are `unit_key`, `stamp`, `kind`, `model`, `dimension`, and `components`, and a changed shape is dropped and rebuilt, which on a record the other product serves means losing every meaning it held.
-  - The rendered document is prose under a heading with no kind in each line, because that is what the other product's parser reads.
-  - A value here cannot move while that server is installed, because it cannot move there either. `STORAGE.md` gives each value in full and `tests/test_compatibility.py` pins them.
-- `project.json` may only be extended additively; `source-metadata.json` and `source-catalog.json` belong to the research app and are not this product's to change.
-- The project record (`projects.json`) is a pointer and never a state cache.
-  - It holds an id, a name, and a root, and nothing a memory owns.
-  - Deleting it is how a project is unregistered, and nothing in it has to be rebuilt.
-- A project's recorded name is what an agent's client entry carries, never a path.
-  - A configuration is written once and copied between machines, and a path in it is true on exactly one of them.
-- `project_id` is derived from the project's resolved path rather than generated, so a project initialised on two machines gets the same id on both.
-- A pid file outlives its process and the number in it is reused, so a recorded pid is believed only when the process it names still says it is this app's.
-  - `start` decides by that check and `stop` signals nothing it cannot prove it owns.
-- `registry.py` resolves a name exactly, never as a substring. A substring match would put a session's memory in a repository its caller did not ask for.
+  - FTS5 statement rows are the word index and record.
+  - Preserve vector columns: `unit_key`, `stamp`, `kind`, `model`, `dimension`, `components`.
+  - Render prose under a heading, without kind prefixes.
+  - `STORAGE.md` owns the layout; `tests/test_compatibility.py` pins it.
+- Extend `project.json` only additively; never alter research-owned metadata or catalog files.
+- `projects.json` holds id, name, and root pointers, never cached memory state; removing an entry unregisters it.
+- Client entries carry recorded names, never paths; `registry.py` resolves exactly and refuses ambiguity.
+- New `project_id` values derive from resolved paths; preserve existing descriptor IDs.
+  - Different checkout paths can produce different IDs; the recorded name is the portable address.
+- Prove PID ownership before `start` trusts a record or `stop` signals it.
 
 ### The SQL console, which is the one bounded writer
 
-- A read is unrestricted. Any `SELECT` runs, and the read path holds its connection read-only, so the guarantee is SQLite's rather than this code's judgement.
-- A write may touch the `unit` table and nothing else.
-  - `DROP`, `CREATE`, `ALTER`, `PRAGMA`, `ATTACH`, `VACUUM`, and writes naming `meta` or `vector` are refused by name, and so is any statement that mentions a protected table anywhere.
-- One statement per run. Comments are removed before the statement is counted, because a comment is where a second statement hides.
-- The tables behind a statement are not separate from it.
-  - `unit` is an FTS5 virtual table, so the words that find a statement and the statement itself are the same rows, and a hand edit cannot put them out of step.
-  - The one thing an edit can leave behind is a vector describing text the statement no longer holds.
-- An accepted write does exactly three things: it re-renders the standing document, it drops the vectors of the statements it touched, and it queues them again.
-  - Which statements it touched is found by comparing the record before and after, never by reading the write's own `WHERE` clause, because a `WHERE` that was wrong once will be wrong again and the consequence is a vector left describing a statement that is gone.
-- Nothing here is a second implementation of record, forget, or handoff. It is a bounded way to repair a statement, and the tests exist to keep it bounded.
+- Run reads through SQLite read-only connections; allow `SELECT` without a query allowlist.
+- Allow one statement per run after removing comments.
+- Writes may touch only `unit`; reject protected-table references anywhere in a write.
+  - Refuse `DROP`, `CREATE`, `ALTER`, `PRAGMA`, `ATTACH`, `VACUUM`, and writes to `meta` or `vector`.
+- Accepted writes re-render `MEMORY.md`, remove touched vectors, and queue re-embedding.
+  - Determine touched statements from before/after records, never by guessing from `WHERE`.
+- Keep SQL a bounded repair path, not another implementation of record, forget, or handoff.
 
 ### Boundaries a contributor must not cross
 
-- Keep the engine free of the web stack. `tests/test_architecture.py` fails when a module outside `surfaces/` imports `fastmcp`, `mcp`, `pydantic`, `starlette`, or `uvicorn`, and when any module reaches for a surface.
-- Declare each tool once, in `surfaces/mcp.py`, and let the stdio bridge proxy them. A re-declared tool is a second place for it to be wrong.
-- Serve the workspace from `surfaces/workspace/` and keep it there. The workspace is this app's own code, so a fix to it ships in this app's release, and `tests/test_architecture.py` fails when its assets are found anywhere else in the package.
+- Keep the engine free of `fastmcp`, `mcp`, `pydantic`, `starlette`, `uvicorn`, and surface imports.
+  - `tests/test_architecture.py` owns composition exceptions; surfaces must not import one another.
+- Declare tools once in `surfaces/mcp.py`; the bridge proxies rather than re-declares them.
+- Ship workspace code and assets only in `surfaces/workspace/`; hide disabled controls.
 - Keep browser and control writes same-origin, JSON-only, and loopback-only.
-  - A capability that is off is a control that is not rendered, rather than one that is rendered and refused.
-- Keep the package's `surfaces/` split: no surface imports another. A capability reached from two surfaces is a capability implemented where both can see it.
-- Never accept a path from a caller as a memory's location. A scope name is resolved against what the service serves, and an unrecognised one is refused before it can become a filesystem path.
-- Do not let a reader believe a hand edit is a tool call. Every surface reaches the same service, and a write through the SQL panel says what it reindexed.
-- A global option goes before the subcommand and a subcommand's own option after it.
-  - The generated launcher gets this order wrong silently and the failure appears only in a log nobody opens, which is why an integration test runs that script as written.
+- Resolve scope names against served memories; reject unknown names and caller-selected filesystem paths.
+- Distinguish SQL repairs from tool writes and report what was reindexed.
+- Place global options before subcommands and command options after them; execute the generated launcher in integration tests.
 
 ### Reporting a condition
 
-- Name every actionable condition with its remedy beside it, and say a check did not run rather than letting it read as healthy.
-- `doctor` reads only. It writes nothing, fetches no model, and starts no process, so the report exists on a machine that cannot serve yet.
-- A failure message names the reason and where to read more. `Connection closed` is never the whole answer.
-- A gateway that cannot start is reported by the operation that needed it, not by a process that exits quietly.
+- Name actionable conditions, remedies, and log locations; unchecked does not mean healthy.
+- `doctor` reads only: no write, model fetch, or process startup.
+- Never report only `Connection closed`.
 
 ## Architecture
 
@@ -158,4 +130,5 @@ src/memory_rag/
 
 ## Working rule
 
-`pathlib.Path`, type hints, and JSON-serializable payloads. Commit and push after every change without being asked, and push this repository before a parent that pins it.
+- Use `pathlib.Path`, type hints, and JSON-serializable payloads.
+- Validate, commit, and push each change before updating a parent's pointer.

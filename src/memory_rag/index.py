@@ -9,8 +9,10 @@ is stored once and found by words without a second copy to keep in step.
 ``MEMORY.md`` is an **export** of that record: the same statements as plain prose,
 newest first, written when something asks for it — ``--export``, or the page on
 every request — and never in passing. It exists to be read, diffed, and carried,
-and it is not read as an input: a hand edit to it is disclosed rather than
-adopted, and the statement it added is taken into the record instead.
+and it is never read back as memory: a statement in it that the record does not
+hold is one that was removed, and adopting it would undo the removal. A record
+with nothing in it adopts the export whole, which is how a memory written by an
+earlier version is recovered.
 
 The vectors are in the same file, keyed by the same statement digest, and are the
 one derived part a rebuild cannot restore cheaply: they cost one embedding each.
@@ -27,9 +29,11 @@ import sqlite3
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Self
 
 from .store import (
+    DEFAULT_KIND,
     Statement,
     StoreError,
     normalise,
@@ -119,15 +123,22 @@ CREATE TABLE IF NOT EXISTS vector(
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
 
+#: The shape every row read out of a file of an earlier one is returned in: the words,
+#: the identity, the kind, the place, and the two columns of history. A file that did not
+#: have one of them reads with a blank there, because reading only the columns a file
+#: happens to have and taking them by position puts the place where the kind belongs and
+#: files a statement under a number.
+UNIT_SHAPE = ("text", "unit_key", "kind", "stamp", "added_at", "recalls")
+
+
 def read_unit_rows(path: Path) -> list[tuple[str, ...]] | None:
     """Return the statements a file of an earlier shape holds, or None if unreadable.
 
-    Read-only and tolerant: the file may be a word index, a vector file, or one
-    of either without its history columns, and its field may be called `type` or
-    `kind`. The two outcomes are kept apart on purpose. A file that reads and holds
-    nothing is an empty index and may be removed; a file that cannot be read at
-    all is something this server does not understand, and a caller deciding
-    whether to delete it needs to be able to tell those apart.
+    Read-only, tolerant of an older field name, and about the statement table alone: a
+    vector table holds no words, so a row of one is not a statement to import and its key
+    is not a statement's text. A file that reads and holds nothing is an empty index and
+    may be removed; a file that cannot be read at all is something this server does not
+    understand, and a caller deciding whether to delete it needs to tell those apart.
     """
 
     if not path.is_file():
@@ -142,57 +153,26 @@ def read_unit_rows(path: Path) -> list[tuple[str, ...]] | None:
                 str(record[1])
                 for record in connection.execute("PRAGMA table_info(unit)")
             }
-            present = {
-                str(record[1])
-                for record in connection.execute("PRAGMA table_info(vector)")
-            }
         except sqlite3.DatabaseError:
             return None
-        if not columns and not present:
-            # A readable file with neither table holds nothing of this server's.
+        if "text" not in columns:
             return []
-        source = "kind" if "kind" in columns else "type"
-        wanted = [
-            name for name in ("text", "unit_key", source, "stamp") if name in columns
+
+        # An older file called the kind `type`. Every field is named here rather than
+        # filtered, so a blank lands where the shape says it does.
+        def column(name: str) -> str:
+            return name if name != "kind" else ("kind" if "kind" in columns else "type")
+
+        selected = ", ".join(
+            column(name) if column(name) in columns else "''" for name in UNIT_SHAPE
+        )
+        try:
+            found = connection.execute(f"SELECT {selected} FROM unit").fetchall()
+        except sqlite3.DatabaseError:
+            found = []
+        return [
+            tuple("" if value is None else str(value) for value in row) for row in found
         ]
-        rows: list[tuple[str, ...]] = []
-        if wanted:
-            for name in ("added_at", "recalls"):
-                if name in columns:
-                    wanted.append(name)
-            try:
-                found = connection.execute(
-                    f"SELECT {', '.join(wanted)} FROM unit"
-                ).fetchall()
-            except sqlite3.DatabaseError:
-                found = []
-            rows.extend(tuple(str(value) for value in row) for row in found)
-        if present and (not columns or "text" not in columns):
-            key_column = "kind" if "kind" in present else "type"
-            vector_wanted = [
-                name
-                for name in (
-                    "unit_key",
-                    "stamp",
-                    key_column,
-                    "model",
-                    "dimension",
-                    "components",
-                )
-                if name in present
-            ]
-            if len(vector_wanted) == 6:
-                try:
-                    found = connection.execute(
-                        f"SELECT unit_key, stamp, {key_column} FROM vector"
-                    ).fetchall()
-                except sqlite3.DatabaseError:
-                    found = []
-                rows.extend(
-                    (str(key), str(key), str(kind), str(stamp))
-                    for key, stamp, kind in found
-                )
-        return rows
     finally:
         connection.close()
 
@@ -268,6 +248,14 @@ class MemoryIndex:
         #: Vectors copied out of a version-4 vector file by the last upgrade, and
         #: zero when there was none to copy.
         self.migrated_vectors: int = 0
+        #: Whether this object made the record file, or rebuilt its statement table
+        #: from a file of an older shape. A record in either state has held no
+        #: statement of its own, which is what makes the document beside it a
+        #: recovery source rather than a stale copy of what was removed from it.
+        self._record_is_new: bool | None = None
+        #: Whether the statement table was just rebuilt from a file of an older shape,
+        #: set by the schema check during this object's open.
+        self._adopted_legacy_shape = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -340,27 +328,29 @@ class MemoryIndex:
         return moved
 
     def retire_superseded(self, *, render: bool = False) -> list[str]:
-        """Remove the copies a memory does not keep, once the record has their words.
+        """Remove the copies a memory does not keep, once the record has their statements.
 
-        A memory used to be two databases and a document. All three were read into
-        the record when the record became one file, and all three were left where
-        they were, so a scope kept files describing the same memory beside the one
-        that holds it: the symptom of an installation two versions at once.
+        A memory used to be two databases and a document, all three read into the record
+        when the record became one file and all three left where they were. So a scope
+        kept files describing the same memory beside the one that holds it.
 
-        Each is read first and anything the record lacks is imported, because this
-        is the one moment that can rescue a statement that exists only in an older
-        file. The databases are then removed, having never been anything but a copy.
-        A document is different: it is the rendering, so it is removed only when it
-        held something the record did not, and otherwise only when the caller asks
-        with ``render=False`` and no statement needed rescuing — which is what
-        ``--retire-document`` does. A file that cannot be read at all is left where
-        it is rather than deleted on a guess.
+        A superseded index file is read first and anything the record lacks is imported,
+        which is the one moment a statement that exists only in an older file can be
+        rescued. The rendering is not read: it is written from the record, so a statement
+        in it that the record does not hold is one that was deleted, and adopting it
+        would undo the deletion. :meth:`adopt_document_if_empty` covers the recovery case
+        instead, on a record that has never held a statement. The rendering is removed
+        only with ``render=True``, and a file that cannot be read is left where it is.
+
+        Nothing is removed until its statements are committed, so a failed commit leaves
+        the file holding the only copy.
         """
 
         connection = self._open()
         known = self.unit_keys()
         held = {statement.text for statement in self.statements()}
         retired: list[str] = []
+        removals: list[Path] = []
         # The vector file is not here: `_adopt_legacy_vectors` owns it, copies what
         # it can read out of it, and removes it only when it could. A file this
         # version cannot read is left where it is on either path.
@@ -368,26 +358,32 @@ class MemoryIndex:
             path = self.scope_directory / name
             if not path.is_file():
                 continue
-            rows = self._readable_rows(path)
-            if rows is None:
-                continue
-            missing = [
-                row for row in rows if row[0] not in held and row[1] not in known
-            ]
-            if missing:
-                self._adopt_legacy_unit(connection, missing)
-                # What this file held is now the record's, so the next file is
-                # compared against the record as it now stands rather than as it
-                # stood before this one was read.
-                held = held | {row[0] for row in missing}
-                known = known | {row[1] for row in missing}
-            if name == RENDERED_FILENAME and not missing and not render:
-                # A rendering the record already agrees with is what somebody asked
-                # for, so it stays until they ask for it to go.
-                continue
-            for suffix in ("", "-wal", "-shm"):
-                Path(f"{path}{suffix}").unlink(missing_ok=True)
+            if name == RENDERED_FILENAME:
+                if not render:
+                    continue
+            else:
+                rows = self._readable_rows(path)
+                if rows is None:
+                    continue
+                missing = [
+                    row for row in rows if row[0] not in held and row[1] not in known
+                ]
+                if missing:
+                    self._adopt_legacy_unit(connection, missing)
+                    # What this file held is now the record's, so the next file is
+                    # compared against the record as it now stands rather than as it
+                    # stood before this one was read.
+                    held = held | {row[0] for row in missing}
+                    known = known | {row[1] for row in missing}
             retired.append(name)
+            removals.extend(Path(f"{path}{suffix}") for suffix in ("", "-wal", "-shm"))
+        # A file is removed only once the statements it held are in the record and
+        # SQLite has said so. A commit that fails leaves the record without them while
+        # the file still has them, and removing it there destroys the only copy; the
+        # failure is raised instead, with both files left as they were.
+        connection.commit()
+        for candidate in removals:
+            candidate.unlink(missing_ok=True)
         if retired:
             self.retired.extend(retired)
         return retired
@@ -408,8 +404,14 @@ class MemoryIndex:
     def _readable_rows(self, path: Path) -> list[tuple[str, str, str, str]] | None:
         """Return what a superseded file holds, or None when it cannot be read.
 
-        A database and a document are read differently and end at the same place:
-        a row of text, its identity, its kind, and its place.
+        A database and a document are read differently and end at the same place: text,
+        identity, kind, and place.
+
+        An identity a file recorded is kept. A statement is identified by its kind and its
+        words, so recomputing the identity from the words alone drops the kind from the
+        digest: the imported row then has an identity no write produces again, and
+        recording the same words under the same kind adds a second row. Only a file with
+        no identity gets one made for it.
         """
 
         if path == self.scope_directory / RENDERED_FILENAME:
@@ -423,15 +425,17 @@ class MemoryIndex:
         rows = read_unit_rows(path)
         if rows is None:
             return None
-        return [
-            (
-                row[0],
-                unit_key(row[0]),
-                row[2] if len(row) > 2 else "ITEM",
-                row[3] if len(row) > 3 else "0",
+        held: list[tuple[str, str, str, str]] = []
+        for text, key, kind, stamp, *_history in rows:
+            held.append(
+                (
+                    text,
+                    key or unit_key(f"{kind or DEFAULT_KIND}: {text}"),
+                    kind or DEFAULT_KIND,
+                    stamp or "0",
+                )
             )
-            for row in rows
-        ]
+        return held
 
     def _vector_table_is_older_shape(self, connection: sqlite3.Connection) -> bool:
         """Report whether the vector table is not the shape this version writes."""
@@ -452,17 +456,20 @@ class MemoryIndex:
         connection: sqlite3.Connection | None = None
         try:
             self.scope_directory.mkdir(parents=True, exist_ok=True)
+            created = not self.path.is_file()
             connection = sqlite3.connect(self.path)
             connection.execute("PRAGMA journal_mode=WAL")
             self._create_schema(connection)
+            empty = connection.execute("SELECT 1 FROM unit LIMIT 1").fetchone() is None
+            self._record_is_new = (created or self._adopted_legacy_shape) and empty
             self._connection = connection
         except (OSError, sqlite3.Error) as error:
             if connection is not None:
                 connection.close()
             raise IndexError(
                 f"the search index at {self.path} could not be opened: {error}. "
-                "This server needs a SQLite built with FTS5; delete the file to "
-                "rebuild it"
+                "This server needs a SQLite built with FTS5. Check permissions and "
+                "locks; preserve this file because it holds the memory record."
             ) from error
         return self._connection
 
@@ -487,6 +494,15 @@ class MemoryIndex:
         return count
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
+        previous_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(unit)")
+        }
+        self._adopted_legacy_shape = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'unit'"
+            ).fetchone()
+            is None
+        )
         connection.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS unit USING fts5("
             "text, unit_key UNINDEXED, kind UNINDEXED, stamp UNINDEXED, "
@@ -521,6 +537,11 @@ class MemoryIndex:
                 "text, unit_key UNINDEXED, kind UNINDEXED, stamp UNINDEXED, "
                 "added_at, recalls)"
             )
+            # The statements of the replaced table come back from the file it was in,
+            # and anything it did not hold can only come from the document beside it,
+            # so this is the one upgrade where an existing record file may still adopt
+            # one.
+            self._adopted_legacy_shape = not {"added_at", "recalls"} <= previous_columns
         if current != SCHEMA_VERSION:
             # Only when it differs, so a read on a current file takes no write
             # lock: a read that had to write would fail against a scope another
@@ -548,7 +569,7 @@ class MemoryIndex:
         columns = {
             str(record[1]) for record in connection.execute("PRAGMA table_info(unit)")
         }
-        if not columns:
+        if "text" not in columns:
             return []
         # A file from before 7 held the field as `type`; it is the same value
         # under the name it is now read as, so either column is accepted. The
@@ -556,17 +577,17 @@ class MemoryIndex:
         # are there and defaulted where an older file has none.
         source = "kind" if "kind" in columns else "type"
         wanted = [
-            name for name in ("text", "unit_key", source, "stamp") if name in columns
+            name if name in columns else "NULL"
+            for name in ("text", "unit_key", source, "stamp", "added_at", "recalls")
         ]
-        for name in ("added_at", "recalls"):
-            if name in columns:
-                wanted.append(name)
         query = ", ".join(wanted)
         try:
             rows = connection.execute(f"SELECT {query} FROM unit").fetchall()
         except sqlite3.DatabaseError:
             return []
-        return [tuple(str(value) for value in row) for row in rows]
+        return [
+            tuple("" if value is None else str(value) for value in row) for row in rows
+        ]
 
     def _adopt_legacy_unit(
         self,
@@ -597,6 +618,9 @@ class MemoryIndex:
         placed = _last_position(connection) + 1 if known else None
         for row in rows:
             text, key, kind, stamp = row[0], row[1], row[2], row[3]
+            kind = kind or DEFAULT_KIND
+            key = key or unit_key(f"{kind}: {text}")
+            stamp = stamp or "0"
             if key in known:
                 continue
             known.add(key)
@@ -620,18 +644,58 @@ class MemoryIndex:
         return moved
 
     def close(self) -> None:
-        """Close the index file, if this object opened it."""
+        """Close the index file, settling whatever this object still owes it.
 
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
+        SQLite holds a transaction open until something commits it and discards an open
+        one on close, so the object's lifetime owns its transaction: what it wrote is
+        durable when it closes, and a read-only object commits nothing.
+
+        A failed commit is raised and the statements it would have saved are rolled back,
+        because a caller told a memory was written when it was not has no other way to
+        find out.
+        """
+
+        connection, self._connection = self._connection, None
+        if connection is None:
+            return
+        try:
+            connection.commit()
+        except BaseException:
+            with contextlib.suppress(sqlite3.Error):
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def __enter__(self) -> Self:
         self._open()
         return self
 
-    def __exit__(self, *_: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit on a clean exit, roll back on a failed one, and release either way.
+
+        A failed operation commits nothing. The rows it staged are half of an answer the
+        caller was told did not happen, so a caller that rolls its own work back and
+        leaves this block would otherwise find this block's commit turning the failure
+        into a partial record.
+        """
+
+        if exc_type is None:
+            self.close()
+            return
+        connection, self._connection = self._connection, None
+        if connection is None:
+            return
+        try:
+            with contextlib.suppress(sqlite3.Error):
+                connection.rollback()
+        finally:
+            connection.close()
 
     # -- the record ------------------------------------------------------------
 
@@ -723,6 +787,7 @@ class MemoryIndex:
             ),
         )
         connection.commit()
+        self._record_is_new = False
         return key, replaced
 
     def matches(self, text: str) -> list[Statement]:
@@ -747,6 +812,7 @@ class MemoryIndex:
         connection = self._open()
         cursor = connection.execute("DELETE FROM unit WHERE unit_key = ?", (key,))
         connection.commit()
+        self._record_is_new = False
         return int(cursor.rowcount or 0)
 
     def forget(self, normalized: str) -> list[Statement]:
@@ -770,44 +836,69 @@ class MemoryIndex:
         """Make the record hold exactly these statements, in this order.
 
         What a person editing the document means. A statement whose words are
-        unchanged keeps its date and its count, because it is the same statement
-        however the file around it was arranged; one that is new is dated now; and
-        one that is gone is dropped with its history, which is the point of the
-        edit. The number of each is returned, so a caller can say what the edit
-        did rather than only that it was saved.
+        unchanged keeps its kind, its date, and its count, because it is the same
+        statement however the file around it was arranged: a rendering carries no
+        kinds, so the statement the record filed under `NOTE` and the page sent
+        back as plain prose is that statement rather than a new one filed as
+        `ITEM`. A kind the incoming statement names is honoured, so a document
+        written with `KIND: ` prefixes does re-file a statement. One that is new
+        is dated now, and one that is gone is dropped with its history, which is
+        the point of the edit. A statement the document holds twice is stored
+        once, because the table has no constraint to ignore against. The number
+        of each is returned, so a caller can say what the edit did rather than
+        only that it was saved.
         """
 
         connection = self._open()
-        before = {
-            str(row[0]): (row[1], int(row[2] or 0))
-            for row in connection.execute(
-                "SELECT unit_key, added_at, recalls FROM unit"
-            )
-        }
-        keep = {statement.key for statement in statements}
+        before: dict[str, dict[str, object]] = {}
+        by_words: dict[str, str] = {}
+        for key, text, kind, added_at, recalls in connection.execute(
+            "SELECT unit_key, text, kind, added_at, recalls FROM unit"
+        ):
+            key = str(key)
+            before[key] = {
+                "kind": str(kind),
+                "added_at": added_at or None,
+                "recalls": int(recalls or 0),
+            }
+            by_words.setdefault(normalise(str(text)), key)
+        settled: list[tuple[str, Statement]] = []
+        keep: set[str] = set()
+        for statement in statements:
+            key = statement.key
+            if key not in before and statement.kind == DEFAULT_KIND:
+                held = by_words.get(normalise(statement.text))
+                if held is not None:
+                    key = held
+            if key in keep:
+                continue
+            keep.add(key)
+            settled.append((key, statement))
         removed = [key for key in before if key not in keep]
         for key in removed:
             connection.execute("DELETE FROM unit WHERE unit_key = ?", (key,))
-        for position, statement in enumerate(statements):
-            added_at, recalls = before.get(statement.key, (None, 0))
-            connection.execute("DELETE FROM unit WHERE unit_key = ?", (statement.key,))
+        for position, (key, statement) in enumerate(settled):
+            facts = before.get(key, {})
+            connection.execute("DELETE FROM unit WHERE unit_key = ?", (key,))
             connection.execute(
                 "INSERT INTO unit"
                 "(text, unit_key, kind, stamp, added_at, recalls) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     statement.text,
-                    statement.key,
-                    statement.kind,
+                    key,
+                    str(facts.get("kind") or statement.kind),
                     str(position),
-                    added_at or _now(),
-                    recalls,
+                    facts.get("added_at") or _now(),
+                    int(facts.get("recalls") or 0),
                 ),
             )
         connection.commit()
+        self._record_is_new = False
+        unchanged = len(before) - len(removed)
         return {
-            "kept": len(before) - len(removed),
-            "added": len(statements) - (len(before) - len(removed)),
+            "kept": unchanged,
+            "added": len(settled) - unchanged,
             "removed": len(removed),
             "vectors_removed": self.collect_vectors(),
         }
@@ -893,21 +984,20 @@ class MemoryIndex:
         return adopted
 
     def adopt_document_if_empty(self) -> int:
-        """Read a document into an empty record, and return how many came in.
+        """Recover legacy prose only into a new or migrated empty statement table.
 
-        A memory used to be one file, so a file is how such a memory is recovered:
-        this reads the words and the order, and a statement whose kind the file
-        cannot supply becomes ``ITEM``, with no date and no count, because those
-        lived in a record this one never was. It runs when the record has nothing
-        in it, and never over a record that has something.
+        Successful record writes end eligibility, including writes that empty the table.
         """
 
         connection = self._open()
+        if self._record_is_new is not True or self.count_units():
+            return 0
         text = read_document(self.scope_directory)
         if text is None:
             return 0
         moved = self._adopt_document(connection, text)
         connection.commit()
+        self._record_is_new = False
         if not moved:
             return 0
         return int(connection.execute("SELECT count(*) FROM unit").fetchone()[0] or 0)
@@ -1107,31 +1197,36 @@ class MemoryIndex:
         return sorted(counts, key=lambda term: counts[term])
 
 
-def rebuild(scope_directory: Path) -> dict[str, int]:
+def rebuild(scope_directory: Path) -> dict[str, object]:
     """Settle one scope's derived state, and report what it now holds.
 
-    A record is not a cache, so nothing here deletes it. The statements, the kinds, the
-    stamps, the dates, and the recall counts *are* the file, and the only parts of it
-    that are derived from the statements are the word index — which is the statement
-    table itself, because it is an FTS5 table — and the vectors.
+    A record is not a cache, so nothing here deletes it: the statements, the kinds, the
+    stamps, the dates, and the recall counts *are* the file, and the only derived parts of
+    it are the vectors and the rendering — the word index is the statement table itself,
+    because it is an FTS5 table.
 
-    So rebuilding means dropping the vectors of statements the record no longer holds
-    and re-rendering the document, then letting the caller embed what is missing. It
-    deliberately does not remove the file: a rebuild that deleted the record would
-    destroy every statement in the memory, and the recovery would be retyping them
-    from a rendering this module writes and never reads back.
+    So a rebuild drops the vectors of statements the record no longer holds and writes
+    the rendering again, and lets the caller embed what is missing. Retiring the rendering
+    removes the file, so the write has to follow it. An export is adopted first when the
+    record has never held a statement, which is the one case where it holds one the
+    record does not.
     """
 
     with MemoryIndex(scope_directory) as index:
+        index.adopt_document_if_empty()
         vectors_removed = index.collect_vectors()
         index.retire_superseded(render=True)
+        rendered = index.write_render()
         return {
             "statements": index.count_units(),
             "vectors_removed": vectors_removed,
+            "rendered": str(rendered),
         }
 
 
-def index_all(scope_directories: Sequence[Path]) -> dict[str, int]:  # pragma: no cover
+def index_all(
+    scope_directories: Sequence[Path],
+) -> dict[str, dict[str, object]]:  # pragma: no cover
     """Settle several scopes, for a maintenance caller."""
 
     return {str(scope): rebuild(scope) for scope in scope_directories}

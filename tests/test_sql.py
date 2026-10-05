@@ -77,7 +77,7 @@ async def test_a_read_returns_the_columns_and_the_rows(recorded: MemoryService) 
     assert answer["columns"] == ["kind", "text"]
     assert answer["rows"] == [["RULE", RECORDED]]
     assert answer["row_count"] == 1
-    assert answer["scope"] == "local"
+    assert answer["scope"] == "demo"
 
 
 @pytest.mark.asyncio
@@ -111,6 +111,30 @@ async def test_a_read_is_capped_and_says_so(recorded: MemoryService) -> None:
         "local", "SELECT text FROM unit UNION ALL SELECT text FROM unit"
     )
     assert answer["row_count"] <= 500
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT nope FROM unit",
+        "SELECT text FROM unit WHERE ??? = 1",
+        "SELECT text FROM no_such_table",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_read_sqlite_cannot_run_is_a_refusal_that_names_why(
+    recorded: MemoryService, statement: str
+) -> None:
+    """A read is unrestricted, and an impossible one is answered rather than raised.
+
+    SQLite's own error is the useful part of the answer, and it names the statement that
+    would not run. Letting it out of this module reaches the browser as a bare 500 and
+    the terminal as a traceback, which tells a reader neither what they wrote nor why.
+    """
+
+    with pytest.raises(SqlRefusal) as raised:
+        await recorded.sql_query("local", statement)
+    assert "could not run that read" in str(raised.value)
 
 
 @pytest.mark.asyncio
@@ -181,6 +205,119 @@ async def test_an_insert_and_a_delete_are_accepted(recorded: MemoryService) -> N
     assert (await recorded.sql_query("local", "SELECT count(*) FROM unit"))["rows"] == [
         [1]
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_replace_into_the_statements_is_accepted(
+    recorded: MemoryService,
+) -> None:
+    """`REPLACE` is one of the write keywords this console names, so it is one it runs.
+
+    The classifier's own list admits `replace`, and refusing the statement with a reason
+    about an unnamed table would refuse a write that touches nothing but the statements.
+    """
+
+    answer = await recorded.sql_execute(
+        "local",
+        "REPLACE INTO unit (text, unit_key, kind, stamp) VALUES ('r', 'k9', 'ITEM', '3')",
+    )
+    assert answer["rows_affected"] == 1
+    assert (
+        await recorded.sql_query("local", "SELECT text FROM unit WHERE unit_key = 'k9'")
+    )["rows"] == [["r"]]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO unit (text, unit_key, kind, stamp) VALUES ('x', 'bad', 'RULE', 'first')",
+        (
+            "INSERT INTO unit (text, unit_key, kind, stamp, recalls) "
+            "VALUES ('x', 'bad', 'RULE', '0', 'many')"
+        ),
+        "INSERT INTO unit (text, unit_key, kind) VALUES (NULL, 'bad', 'RULE')",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_write_leaving_a_row_the_record_cannot_read_is_refused(
+    recorded: MemoryService, statement: str
+) -> None:
+    """A statement the record cannot count is refused rather than saved.
+
+    The record reads a statement's place and its recall count as whole numbers, so a row
+    holding words in either of them makes every later read of that memory fail with a
+    conversion error that names nothing a reader can act on. The check runs on the
+    connection the write already holds and before it is committed, so the write is
+    rolled back and the memory is left as it was.
+    """
+
+    before = await recorded.sql_query("local", "SELECT text, kind FROM unit")
+    with pytest.raises(SqlRefusal) as raised:
+        await recorded.sql_execute("local", statement)
+    assert "cannot read back" in str(raised.value)
+    assert "rolled back" in str(raised.value)
+    assert await recorded.sql_query("local", "SELECT text, kind FROM unit") == before
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_counts_the_statements_it_changes_is_accepted(
+    recorded: MemoryService,
+) -> None:
+    """The rule refuses rows the record cannot count, not rows it counts differently.
+
+    A repair that sets a place or adds to a recall count in its own words is the ordinary
+    way an operator reorders or recounts, so the numbers a statement legitimately holds
+    have to be accepted.
+    """
+
+    answer = await recorded.sql_execute(
+        "local",
+        "UPDATE unit SET stamp = CAST(stamp AS INTEGER) + 5, recalls = 3",
+    )
+    assert answer["rows_affected"] == 1
+    rows = (await recorded.sql_query("local", "SELECT stamp, recalls FROM unit"))[
+        "rows"
+    ]
+    assert [int(stamp) for stamp, _recalls in rows] == [5]
+    assert [int(recalls) for _stamp, recalls in rows] == [3]
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_statement_stays_deleted_after_the_maintain(
+    recorded: MemoryService,
+) -> None:
+    """The reindex that follows an accepted write must not put the statement back.
+
+    A re-rendered document still holds whatever it held when it was written, so reading
+    it as a source of statements would restore every statement a delete had just
+    removed, and the write the user made by hand would be reported as done and undone
+    in the same call.
+    """
+
+    removed = await recorded.sql_execute(
+        "local", f"DELETE FROM unit WHERE text = {RECORDED!r}"
+    )
+    assert removed["rows_affected"] == 1
+    assert (await recorded.sql_query("local", "SELECT count(*) FROM unit"))["rows"] == [
+        [0]
+    ]
+    answer = await recorded.recall("repository", limit=5)
+    assert answer["units"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_forgotten_statement_is_not_brought_back_by_a_later_read(
+    recorded: MemoryService,
+) -> None:
+    """The same rule on the path an agent takes, through the same reindex."""
+
+    answer = await recorded.forget(RECORDED)
+    assert answer["status"] == "forgotten"
+    with MemoryIndex(recorded.scope("local").directory) as index:
+        index.write_render()
+        index.retire_superseded(render=True)
+        index.write_render()
+    assert (await recorded.recall("repository", limit=5))["units"] == []
 
 
 @pytest.mark.asyncio

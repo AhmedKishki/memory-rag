@@ -30,15 +30,22 @@ from .registry import RegisteredProject, RegistryError
 from .registry import load as load_projects
 from .retrieval import Retrieval, RetrievalSettings
 from .sql import SqlRefusal, drop_vectors, sql_execute, sql_query
-from .store import SCOPE_EITHER, Kind, StoreError, kind_named, statement_kind
+from .store import (
+    SCOPE_GLOBAL,
+    SCOPE_LOCAL,
+    Kind,
+    StoreError,
+    kind_named,
+    statement_kind,
+)
 
 
 def _kind_of(kind: str) -> Kind:
     """Return the kind a caller's word names, refusing it as a model error.
 
-    A kind outside the set is a refusal rather than a failure, and every other
-    service refusal is a :class:`ModelError`, so a caller that catches one thing
-    catches this too.
+    A kind outside the set is a refusal rather than a failure, and every other service
+    refusal is a :class:`ModelError`, so a caller that catches one thing catches this
+    too.
     """
 
     try:
@@ -46,10 +53,40 @@ def _kind_of(kind: str) -> Kind:
     except StoreError as error:
         raise ModelError(str(error)) from error
 
+
+def _bounded_limit(limit: object) -> int:
+    """Return a caller's read limit as the whole number it has to be, or refuse it.
+
+    ``bool`` is an ``int`` in Python and a float is not one at all, so converting alone
+    would accept ``True`` as one statement and ``1.5`` as one, answering a caller asking
+    for half a statement with an answer it cannot account for. A string is refused for
+    the same reason: every surface parses its own, so a limit that arrived as text means
+    one surface's check did not run.
+    """
+
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not 1 <= limit <= MAX_RECALL_LIMIT
+    ):
+        raise ModelError(
+            f"limit must be a whole number between 1 and {MAX_RECALL_LIMIT}; {limit!r} "
+            "is not one. A read returns at most that many statements, because each of "
+            "them is text the caller has to read."
+        )
+    return limit
+
+
 #: How long a caller waits for the account's writer before it is told the memory is
 #: busy. A write is a few milliseconds, so a wait this long means a writer is stuck
 #: rather than slow, and the answer says which statement was waiting.
 ACCOUNT_LOCK_TIMEOUT_SECONDS = 20.0
+
+#: How many statements one recall may return. Every text a caller reads is one of them,
+#: so the ceiling is the service's own and not one each surface remembers: the browser,
+#: the agent surface, and the command line reach this, and a bound that lived in one of
+#: them would be a bound the other two do not have.
+MAX_RECALL_LIMIT = 50
 
 GLOBAL_SCOPE = "global"
 LOCAL_SCOPE = "local"
@@ -114,11 +151,15 @@ class MemoryService:
     def scope(self, name: str) -> ScopeRef:
         """Return the one memory a scope name addresses, or refuse to guess.
 
-        ``global`` is the account's. Every project's local memory is addressed by that
-        project's recorded name, so a caller writes ``local`` when the service is
-        serving one project and the project's own name when it is serving several.
-        The project named is the active one, so the tools keep the exact
-        signatures they have always had and take no project argument.
+        ``global`` is the account's and ``local`` is the project this process is serving,
+        which is the word every surface uses for the session's own project: the agent
+        tools have no project argument to pass, so the caller's only way to say "this
+        repository" is the word itself. A project's recorded name addresses that project,
+        and neither can be a recorded name — `registry.RESERVED_NAMES` refuses those two
+        words at the door — so the two never collide.
+
+        The active project's recorded name addresses it too, which is why a caller that
+        knows the project's name reaches the same memory whichever it uses.
         """
 
         key = str(name or "").strip()
@@ -129,36 +170,60 @@ class MemoryService:
                 directory=self.account.global_directory,
                 kind=GLOBAL_SCOPE,
             )
-        if key in (LOCAL_SCOPE, self.active_project_name()):
-            project = self.active_project()
-            if project is None:
-                raise RegistryError(
-                    "no project is active, so there is no local memory to reach. Pass "
-                    "--project-root, or run 'memory-rag init' for the project first."
-                )
-            return ScopeRef(
-                name=key,
-                label=f"{project.project_name} memory",
-                directory=self._project_config(project).local_directory,
-                kind=LOCAL_SCOPE,
-                project=project,
+        named = [
+            project
+            for project in self._projects
+            if project.project_name.casefold() == key.casefold()
+        ]
+        if len(named) > 1:
+            roots = ", ".join(str(project.project_root) for project in named)
+            raise RegistryError(
+                f"{key!r} is the recorded name of {len(named)} projects ({roots}). "
+                "A project's name has to name one project, because it is what a "
+                "client's entry carries; rename one of them with "
+                "'memory-rag init --name' and this name will answer for one."
             )
-        if key:
-            for project in self._projects:
-                if project.project_name.casefold() == key.casefold():
-                    return ScopeRef(
-                        name=project.project_name,
-                        label=f"{project.project_name} memory",
-                        directory=self._project_config(project).local_directory,
-                        kind=LOCAL_SCOPE,
-                        project=project,
-                    )
+        if named:
+            return self.project_scope(named[0])
+        if key == LOCAL_SCOPE or key == self.active_project_name():
+            return self.active_scope()
         known = ", ".join(
-            [GLOBAL_SCOPE, *(project.project_name for project in self._projects)]
+            [
+                GLOBAL_SCOPE,
+                LOCAL_SCOPE,
+                *(project.project_name for project in self._projects),
+            ]
         )
         raise RegistryError(
             f"{name!r} is not a memory this installation serves. Known scopes: "
             f"{known or 'none, so run init for a project first'}."
+        )
+
+    def active_scope(self) -> ScopeRef:
+        """Return the memory of the project this process is serving.
+
+        This is what an unqualified scope means and what a kind that names its own
+        memory as the project's own means. It resolves the project rather than the word
+        ``local``, so a name a caller passed can never redirect it.
+        """
+
+        project = self.active_project()
+        if project is None:
+            raise RegistryError(
+                "no project is active, so there is no local memory to reach. Pass "
+                "--project-root, or run 'memory-rag init' for the project first."
+            )
+        return self.project_scope(project)
+
+    def project_scope(self, project: RegisteredProject) -> ScopeRef:
+        """Return one project's own memory, addressed by that project's recorded name."""
+
+        return ScopeRef(
+            name=project.project_name,
+            label=f"{project.project_name} memory",
+            directory=self._project_config(project).local_directory,
+            kind=LOCAL_SCOPE,
+            project=project,
         )
 
     def scopes(self) -> list[ScopeRef]:
@@ -243,26 +308,41 @@ class MemoryService:
         content: str,
         *,
         kind: str,
-        scope: str = LOCAL_SCOPE,
+        scope: str | None = None,
     ) -> dict[str, Any]:
         """Record one statement in the memory its kind belongs in.
 
-        A kind that names its own memory wins over the argument. What is true of the
-        user is true of them in every project, so ``PERSONALITY`` and ``PREFERENCE``
-        are the account's memory whatever the caller passed; a handoff is this
-        project's own state, so ``HANDOFF`` is the project's. Every other kind takes
-        the caller's choice.
+        A kind that names its own memory wins over the argument. What is true of the user
+        is true of them in every project, so ``PERSONALITY`` and ``PREFERENCE`` are the
+        account's whatever the caller passed; a handoff is this project's own state, so
+        ``HANDOFF`` is the project's, resolved as the project rather than through the
+        word ``local``. Every other kind takes the caller's choice, and no scope at all
+        means this project's memory.
+
+        The answer names the project it filed in, because ``local`` is a way of
+        addressing a project's memory rather than its name and a caller that asked for
+        ``local`` cannot otherwise say which repository it got.
         """
 
         entry = _kind_of(kind)
-        chosen = scope if entry.scope == SCOPE_EITHER else entry.scope
-        ref = self.scope(chosen)
-        return await asyncio.to_thread(
+        if entry.scope == SCOPE_LOCAL:
+            ref = self.active_scope()
+        elif entry.scope == SCOPE_GLOBAL:
+            ref = self.scope(GLOBAL_SCOPE)
+        elif scope is None:
+            ref = self.active_scope()
+        else:
+            ref = self.scope(scope)
+        recorded = await asyncio.to_thread(
             self.retrieval.record,
             content=content,
             directory=ref.directory,
             kind=entry.name,
         )
+        return {
+            **recorded,
+            "scope": ref.project.project_name if ref.project is not None else ref.name,
+        }
 
     async def recall(
         self,
@@ -271,13 +351,21 @@ class MemoryService:
         kind: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
-        """Answer one question from every memory this installation serves."""
+        """Answer one question from every memory this installation serves.
 
+        The ceiling on ``limit`` is :data:`MAX_RECALL_LIMIT`, refused rather than
+        clamped: a caller that asked for a thousand statements and got ten has an answer
+        it cannot account for, and the bound is the same whichever surface it arrived
+        through. It has to arrive as a whole number rather than as something convertible
+        to one, so ``True`` is not one statement and ``1.5`` is not one either.
+        """
+
+        wanted = _bounded_limit(limit)
         return await asyncio.to_thread(
             self.retrieval.answer_both,
             directories=self.recall_directories(),
             query=query,
-            limit=limit,
+            limit=wanted,
             kind=kind,
         )
 
@@ -287,13 +375,25 @@ class MemoryService:
         *,
         scope: str | None = None,
     ) -> dict[str, Any]:
-        """Remove the one statement this text is exactly, from one memory or either."""
+        """Remove the one statement this text is exactly, from one memory or either.
 
+        A named scope is resolved here rather than passed through, because the retrieval
+        searches whatever it is handed and a name it cannot match falls back to a search
+        of every memory: that would remove a statement out of a repository the caller
+        named something else for.
+        """
+
+        directories = self.recall_directories()
+        chosen = None
+        if scope is not None:
+            ref = self.scope(scope)
+            chosen = ref.name
+            directories = {ref.name: ref.directory}
         return await asyncio.to_thread(
             self.retrieval.forget,
             text=text,
-            directories=self.recall_directories(),
-            scope=scope,
+            directories=directories,
+            scope=chosen,
         )
 
     async def handoff(self, content: str) -> dict[str, Any]:
@@ -305,18 +405,16 @@ class MemoryService:
         itself, so this resolves the project and records under ``HANDOFF``.
         """
 
-        project = self.active_project()
-        if project is None:
-            raise RegistryError(
-                "no project is active, so there is nowhere to file a handoff. Pass "
-                "--project-root."
-            )
-        ref = self.scope(project.project_name)
-        return await asyncio.to_thread(
+        ref = self.active_scope()
+        answer = await asyncio.to_thread(
             self.retrieval.handoff,
             directory=ref.directory,
             content=content,
         )
+        return {
+            **answer,
+            "scope": ref.project.project_name if ref.project is not None else ref.name,
+        }
 
     # -- the command center's own operations ---------------------------------
 
@@ -376,19 +474,29 @@ class MemoryService:
     def describe(self) -> dict[str, Any]:
         """Return what this installation serves, for a status answer.
 
-        The account, the projects, and where each memory's record is, so a reader can
-        see the whole of what the command center manages from one answer. A scope's
-        directory is named because the path is the fact that tells a user which file
-        holds a memory, and the SQL panel works on exactly that file.
+        The account, the projects, and where each memory's record is, so one answer
+        holds the whole of what the command center manages. A scope's directory is named
+        because the path is what tells a reader which file holds a memory, and the SQL
+        panel works on that file.
+
+        The active project is named because it decides where a write lands: the tools
+        take no project argument, so a caller cannot ask. Its root is named beside it
+        because a stdio client compares its own resolved project against that rather than
+        against a name a human spelled.
         """
 
         scopes = [ref.as_dict() for ref in self.scopes()]
         for ref, described in zip(self.scopes(), scopes, strict=True):
             described["record"] = str(ref.directory / "memory.sqlite3")
+        active = self.active_project()
         return {
             "storage_root": str(self.account.storage_root),
             "scopes": scopes,
             "project_count": len(self._projects),
+            "active_project": active.project_name if active is not None else None,
+            "active_project_root": str(active.project_root)
+            if active is not None
+            else None,
         }
 
 
@@ -432,6 +540,7 @@ __all__ = [
     "ACCOUNT_LOCK_TIMEOUT_SECONDS",
     "GLOBAL_SCOPE",
     "LOCAL_SCOPE",
+    "MAX_RECALL_LIMIT",
     "MemoryService",
     "ModelError",
     "ScopeRef",

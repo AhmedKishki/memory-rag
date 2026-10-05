@@ -96,7 +96,7 @@ def test_the_launcher_keeps_the_app_alive_after_its_own_shell_exits(
 
     # The launching shell is long gone by now; the process must still be there.
     assert launcher.running_pid(clean_app) == started["pid"]
-    assert launcher.process_is_ours(started["pid"])
+    assert launcher.process_is_ours(started["pid"], clean_app)
     assert launcher.running_url(clean_app) == f"http://127.0.0.1:{port}"
 
 
@@ -229,6 +229,97 @@ def test_the_state_of_a_stopped_account_says_so(clean_app: Path) -> None:
     assert state["log"].endswith("memory-rag.log")
 
 
+# -- whose process a pid file may name -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [],
+        ["/bin/sleep", "30"],
+        # An unrelated process whose arguments mention this product. The repository
+        # directory itself is called `memory-rag`, so any command run against a path in
+        # it mentions the product by accident, and a substring match would read all of
+        # these as the app.
+        ["/bin/sleep", "30", "/home/ahmed/Documents/ultra-rag-mcp-servers/memory-rag"],
+        ["/bin/sleep", "30", "/home/ahmed/Documents/memory-ragged/notes.md"],
+        ["/bin/sleep", "30", "memory-rag-notes.md"],
+        ["vim", "/tmp/memory_rag_notes.md"],
+        ["git", "-C", "/srv/memory-rag/app", "status"],
+        # A `-m` naming another module is not this app either.
+        ["/usr/bin/python3", "-m", "memory_ragged"],
+        ["/usr/bin/python3", "-m", "some_other_module", "serve"],
+        # A shell that would run the console script is the shell, not the app.
+        ["/bin/sh", "-c", "memory-rag serve"],
+    ],
+)
+def test_a_command_line_that_only_mentions_this_product_is_not_its_own(
+    arguments,
+) -> None:
+    """Mentioning this product is not the same as being it.
+
+    `start` decides by this check and `stop` signals what it believes, so reading a
+    process that merely carries the product's name as this app's would make a stopped
+    app look running and hand `stop` a process that belongs to somebody else.
+    """
+
+    assert launcher.arguments_are_ours(arguments) is False
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # The console script, which is how a user starts this product.
+        ["/home/ahmed/.venv/bin/memory-rag", "serve", "--port", "8765"],
+        ["/usr/bin/bin/memory_rag"],
+        ["/opt/memory-rag/bin/memory-rag"],
+        # `python -m`, which is what the generated launcher builds.
+        ["/usr/bin/python3", "-m", "memory_rag", "serve", "--port", "8765"],
+        ["/usr/bin/python3", "-m", "memory-rag"],
+        ["python", "-m", "memory_rag", "--project-root", "/srv/app"],
+    ],
+)
+def test_a_command_line_that_starts_this_product_is_its_own(arguments) -> None:
+    """Both shapes the product is started in are accepted, so `start` is not blocked."""
+
+    assert launcher.arguments_are_ours(arguments) is True
+
+
+def test_a_live_process_of_another_program_is_not_believed(clean_app: Path) -> None:
+    """The same rule against a real process, so the reading of `/proc` is exercised."""
+
+    unrelated = subprocess.Popen(["/bin/sleep", "30"])
+    try:
+        assert launcher.process_is_ours(unrelated.pid, clean_app) is False
+    finally:
+        unrelated.kill()
+        unrelated.wait(timeout=30)
+
+
+def test_a_pid_that_names_no_process_is_not_believed(clean_app: Path) -> None:
+    assert launcher.process_is_ours(0, clean_app) is False
+
+
+def test_the_generated_script_reports_a_start_that_never_answered(
+    clean_app: Path,
+) -> None:
+    """An app that never opened its port is not an app at an address.
+
+    The script waited for the port rather than for the process, and then printed the
+    address anyway, so a start that did not work reported success and the reader found
+    a refused connection. The failure names the log, and the record is kept because the
+    process is alive and `stop` has to find it.
+    """
+
+    script = launcher.ensure_launcher(clean_app)
+    text = script.read_text(encoding="utf-8")
+    assert "served=no" in text, "the script does not track whether the port answered"
+    assert 'if [ "$served" != yes ]; then' in text
+    # The branch has to come before the address is printed, or the address is still a
+    # claim the script has not earned.
+    assert text.index('if [ "$served" != yes ]') < text.index("the app is at")
+
+
 def test_the_entry_a_project_makes_names_its_name_and_not_its_path(
     clean_app: Path, tmp_path: Path
 ) -> None:
@@ -256,3 +347,147 @@ def _account(storage_root: Path):
     return AccountConfig(
         storage_root=storage_root, global_directory=global_directory(storage_root)
     )
+
+
+# -- whose process a record may name ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # Code from a string is not this app, however the string names it.
+        ["/usr/bin/python3", "-c", "import memory_rag; memory_rag.main()"],
+        # `-m` is only read as a flag of the interpreter, never as an option value.
+        ["/usr/bin/python3", "-W", "-m", "memory_rag"],
+        ["/usr/bin/python3", "-X", "dev", "memory_rag"],
+        # An interactive interpreter names no program.
+        ["/usr/bin/python3", "-i", "memory_rag"],
+        # After `--` the interpreter runs a file, whatever it is called.
+        ["/usr/bin/python3", "--", "memory_rag"],
+        # The product's name as an option value.
+        ["/usr/bin/python3", "-m", "pytest", "-k", "memory_rag"],
+        # A wrapper that would run the app is the wrapper.
+        ["/usr/bin/env", "memory_rag", "serve"],
+    ],
+)
+def test_a_command_line_that_only_carries_the_name_is_not_the_program(
+    arguments, clean_app: Path
+) -> None:
+    """The program is the first argument or the module an interpreter was given.
+
+    Looking along the line for the product's name reads whatever mentions it as this
+    app, and `stop` signals what it believes. The old check accepted any argument equal
+    to `-m` followed by the module, so a flag that takes a value could hand it one.
+    """
+
+    assert launcher.arguments_are_ours(arguments) is False
+    assert launcher._program_of(arguments) is None
+
+
+def test_the_account_a_process_serves_is_read_off_that_process(
+    clean_app: Path,
+) -> None:
+    """The same rule the app applies to its own inputs, read off the process.
+
+    A pid file can name a live app of another installation, and that one holds another
+    account's memories, so a pid alone does not say which app this is.
+    """
+
+    other = clean_app / "another-account"
+    other.mkdir()
+    arguments = ["/usr/bin/python3", "-m", "memory_rag", "--storage-root", str(other)]
+    assert launcher.process_storage_root(arguments, "") == other.resolve()
+
+    named = ["/usr/bin/python3", "-m", "memory_rag", f"--storage-root={other}"]
+    assert launcher.process_storage_root(named, "") == other.resolve()
+
+    from_environment = ["/usr/bin/python3", "-m", "memory_rag"]
+    environ = f"MEMORY_ULTRARAG_STORAGE_ROOT={other}\0PATH=/usr/bin\0"
+    assert launcher.process_storage_root(from_environment, environ) == other.resolve()
+
+    # With neither the option nor the environment, the account is the default one, and
+    # that is a fact rather than a reason to assume this account.
+    from memory_rag.config import default_storage_root
+
+    assert launcher.process_storage_root(from_environment, "") == default_storage_root()
+
+
+def test_a_live_app_of_another_account_is_neither_believed_nor_stopped(
+    clean_app: Path, tmp_path: Path
+) -> None:
+    """Two installations on one machine must not read or signal each other's app.
+
+    The record is copied from one account to the other, which is what a restored
+    backup, a copied home directory, or a stale record does. The process behind it is
+    a real app serving the account that started it, so it has to be left running.
+    """
+
+    started = launcher.start_app(clean_app)
+    assert started["started"] is True, started.get("stderr")
+    assert _wait_for_port(started["port"])
+    pid = int(started["pid"])
+
+    other = tmp_path / "another-account"
+    other.mkdir()
+    launcher.ensure_launcher(other)
+    launcher.pid_file(other).write_text(str(pid), encoding="utf-8")
+    launcher.port_file(other).write_text(str(started["port"]), encoding="utf-8")
+
+    assert launcher.process_is_ours(pid, clean_app) is True
+    assert launcher.process_is_ours(pid, other) is False
+    assert launcher.running_pid(other) is None
+    assert launcher.running_url(other) is None
+
+    stopped = launcher.stop_app(other)
+    assert stopped["stopped"] is True
+    assert "not this account's app" in stopped["note"]
+    assert launcher.process_exists(pid), "another account's app was signalled"
+    assert launcher.running_pid(clean_app) == pid
+
+
+def test_a_command_that_would_signal_itself_or_an_ancestor_refuses(
+    clean_app: Path,
+) -> None:
+    """A stale record can name the reader's own shell.
+
+    `stop` runs from a terminal, and a record that names that terminal's process would
+    end the session that asked for it. A group is never signalled either, for the same
+    reason: one signal to a negative pid takes the reader's whole shell with it.
+    """
+
+    assert launcher._may_be_signalled(os.getpid()) is False
+    assert launcher._may_be_signalled(os.getppid()) is False
+    assert launcher._may_be_signalled(1) is False
+
+    unrelated = subprocess.Popen(["/bin/sleep", "30"])
+    try:
+        assert launcher._may_be_signalled(unrelated.pid) is True
+    finally:
+        unrelated.kill()
+        unrelated.wait(timeout=30)
+
+
+def test_a_stop_with_no_process_handle_refuses_rather_than_signalling_a_number(
+    clean_app: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a handle there is no proof left between the check and the signal.
+
+    A pidfd names the process rather than the number. Without one, a number reused
+    between the check and the signal belongs to somebody else, so the app is left
+    running and the reason is reported rather than a signal being sent on a guess.
+    """
+
+    from memory_rag.config import global_directory
+
+    global_directory(clean_app).mkdir(parents=True, exist_ok=True)
+    started = launcher.start_app(clean_app)
+    assert started["started"] is True, started.get("stderr")
+    assert _wait_for_port(started["port"])
+
+    monkeypatch.setattr(launcher, "_open_handle", lambda pid: None)
+    stopped = launcher.stop_app(clean_app)
+
+    assert stopped["stopped"] is False
+    assert "no process handle" in stopped["note"]
+    assert launcher.process_exists(int(started["pid"]))
+    assert launcher.running_pid(clean_app) == int(started["pid"])

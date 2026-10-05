@@ -41,12 +41,12 @@ from ..models import ModelError, describe_environment
 from ..registry import RegistryError, register
 from ..registry import load as load_projects
 from ..runtime import build_service
-from ..service import MemoryService
+from ..service import MAX_RECALL_LIMIT, MemoryService
 from ..sql import SqlRefusal
 
 CLI_NAME = "memory-rag"
 DEFAULT_RESULT_LIMIT = 10
-MAX_RESULT_LIMIT = 50
+MAX_RESULT_LIMIT = MAX_RECALL_LIMIT
 #: The verb the command line uses to settle a memory, named the way the reader thinks
 #: about it rather than the way the index calls it.
 REINDEX_LIMIT_SECONDS = 1.0
@@ -401,7 +401,9 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "The name this project is addressed by, in an agent's client entry and "
-            "in --project. It travels with the configuration; the path does not."
+            "in --project. It travels with the configuration; the path does not. "
+            "'local' and 'global' are refused: those address a memory rather than a "
+            "project."
         ),
     )
     initialise.add_argument(
@@ -442,10 +444,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     record.add_argument(
         "--kind",
-        default=None,
+        required=True,
         help=(
-            "The kind to file it under. RULE, PLAN, PREFERENCE, CORRECTION, or any "
-            "other word in capitals; the default is ITEM."
+            "The kind to file it under, in capitals. There is no default and no "
+            "kindless statement: a kind is what a later recall asks for, and the "
+            "refusal names every kind when the word is not one of them."
         ),
     )
     record.add_argument(
@@ -689,8 +692,10 @@ def _init(arguments: argparse.Namespace, account: AccountConfig) -> CommandResul
 def _project_id(descriptor: Path, root: Path) -> str:
     """Return a stable identity for a project, derived from where it lives.
 
-    Derived rather than random so a project that is initialised twice on two machines
-    gets the same id, which is what lets one client entry name it on both.
+    Derived rather than random, so a second run over the same path names the same
+    project. It is a digest of the resolved path, so two machines that initialise the
+    same repository at different paths get different ids: the recorded name is what
+    travels between them, and an existing descriptor keeps the id it was given.
     """
 
     import hashlib
@@ -1100,8 +1105,13 @@ def _stop_text(account: AccountConfig, arguments: argparse.Namespace) -> Command
     lines = [
         "The app is stopped."
         if stopped.get("stopped")
-        else f"The app was not stopped: {stopped.get('stderr') or stopped.get('note')}"
+        else f"The app was not stopped: {stopped.get('note')}"
     ]
+    # A record that named a process this account does not own is removed rather than
+    # signalled, which is a fact about what the record held rather than about the app.
+    note = stopped.get("note", "")
+    if stopped.get("stopped") and note and not note.startswith("Stopped the app"):
+        lines.append(note)
     if arguments.servers:
         lines.append(
             "\nThe stdio servers on this machine are not stopped by this command: each "
@@ -1146,7 +1156,7 @@ async def _dispatch(
     if command == "handoff":
         payload = await operations.handoff(arguments.content)
         return CommandResult(
-            text="Recorded this session's handoff"
+            text=f"Recorded this session's handoff in {payload.get('scope', 'a memory')}"
             + (
                 f", replacing {payload['replaced']} previous one(s)."
                 if payload.get("replaced")

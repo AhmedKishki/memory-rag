@@ -14,8 +14,11 @@ project be moved, copied, or shared without carrying a port number with it.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +123,7 @@ stop_app() {{
   case "$pid" in
     ''|*[!0-9]*)
       echo "memory-rag: the pid file does not hold a number; removing it."
-      rm -f "$PID_FILE"
+      rm -f "$PID_FILE" "$PORT_FILE"
       exit 0
       ;;
   esac
@@ -129,17 +132,39 @@ stop_app() {{
     rm -f "$PID_FILE" "$PORT_FILE"
     exit 0
   fi
-  # The recorded pid has to still be this app's own process. A pid file outlives its
-  # process and the number gets reused, so a stop that trusted the number alone would
-  # signal whatever the machine happened to run next, which is a process this command
-  # does not own and has no reason to touch.
-  if [ -r "/proc/$pid/cmdline" ]; then
-    if ! tr '\\0' '\\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -qE '(^|/)(memory_rag|memory-rag)([.]py)?$'; then
-      echo "memory-rag: pid $pid is not this app's process, so it was left alone;" \\
-        "removing the record instead." >&2
-      rm -f "$PID_FILE" "$PORT_FILE"
-      exit 0
-    fi
+  # The recorded pid has to still be this app's own process, for this account. A pid
+  # file outlives its process and the number gets reused, so a stop that trusted the
+  # number alone would signal whatever the machine happened to run next. Two things are
+  # checked rather than one: the program the command line actually runs, read from its
+  # first argument or from the module an interpreter was given, and the account it was
+  # told to serve, read from the `--storage-root` this launcher starts the app with.
+  ours=no
+  program=
+  root=
+  previous=
+  while IFS= read -r argument; do
+    if [ -z "$program" ]; then program=$argument; fi
+    if [ "$previous" = "--storage-root" ]; then root=$argument; fi
+    previous=$argument
+  done <<EOF
+$(tr '\\0' '\\n' < "/proc/$pid/cmdline" 2>/dev/null)
+EOF
+  case "${{program##*/}}" in
+    memory-rag|memory-rag.py|memory_rag|memory_rag.py)
+      ours=yes
+      ;;
+    python|python3|python3.*|pypy|pypy3)
+      if tr '\\0' '\\n' < "/proc/$pid/cmdline" 2>/dev/null \\
+        | grep -qx -e memory_rag -e memory-rag; then
+        ours=yes
+      fi
+      ;;
+  esac
+  if [ "$ours" = no ] || [ "$root" != "$STORAGE" ]; then
+    echo "memory-rag: pid $pid is not this account's app, so it was left alone;" \\
+      "removing the record instead." >&2
+    rm -f "$PID_FILE" "$PORT_FILE"
+    exit 0
   fi
   kill -TERM "$pid" 2>/dev/null || true
   waited=0
@@ -261,6 +286,7 @@ printf '%s' "$app_pid" > "$PID_FILE"
 # Wait for the port to answer rather than for the process to exist, because a process
 # that has started and is still loading a model is not yet serving.
 waited=0
+served=no
 while [ "$waited" -lt 120 ]; do
   if command -v python3 >/dev/null 2>&1; then
     if python3 -c "import socket,sys
@@ -272,6 +298,7 @@ except OSError:
     sys.exit(1)
 finally:
     s.close()" "$PORT" 2>/dev/null; then
+      served=yes
       break
     fi
   fi
@@ -283,6 +310,15 @@ finally:
   sleep 1
   waited=$((waited + 1))
 done
+
+# An app that is still loading its models after two minutes is a start that has not
+# worked, and printing an address for it is the one answer a reader cannot act on: the
+# connection is refused by a port nothing is listening on. The record is kept, because
+# the process is alive and `memory-rag stop` has to be able to find it.
+if [ "$served" != yes ]; then
+  echo "memory-rag: the app did not answer on port $PORT within 120 seconds. Read $LOG" >&2
+  exit 1
+fi
 
 case "$open_browser" in
   yes)
@@ -388,51 +424,168 @@ def recorded_port(storage_root: Path) -> int | None:
         return None
 
 
-#: The whole arguments a process of this app carries, as one word. A pid is only this
-#: app's if its own argv says so, because a pid file outlives its process and the
-#: number it holds is reused by whatever runs next: believing a stale record would make
-#: a stopped app look running and a start refuse to start.
+#: The names this app's own process is started under: the console script and the module
+#: `python -m` runs. These are whole names rather than substrings, because a substring
+#: match reads any process that merely mentions this product as this one — and the
+#: repository directory itself is called `memory-rag`.
 PROCESS_MARKERS = ("memory_rag", "memory-rag")
 
+#: Interpreter program names, so `-m` is only read after one of them. A path to an
+#: interpreter is judged on its own name, which is what a distribution calls it.
+_INTERPRETER_NAMES = frozenset(
+    {"python", "python3", "python3.11", "python3.12", "python3.13", "pypy", "pypy3"}
+)
 
-def process_is_ours(pid: int) -> bool:
-    """Whether a live process is this app's own, by its arguments rather than by its
-    number.
+#: Interpreter flags that take no value, so the next argument after one of them is still
+#: the interpreter's own.
+_INTERPRETER_FLAGS_WITHOUT_VALUE = frozenset(
+    {"-B", "-b", "-E", "-h", "-I", "-i", "-O", "-q", "-s", "-S", "-u", "-v", "-V", "-x"}
+)
+
+#: Interpreter flags whose value is the next argument, so that argument is the flag's and
+#: names no program.
+_INTERPRETER_FLAGS_WITH_VALUE = frozenset({"-c", "-W", "-X"})
+
+
+def _program_of(arguments: Sequence[str]) -> str | None:
+    """Return the program a command line actually runs, or None when it cannot tell.
+
+    The program is the first argument, or the module named by an interpreter's `-m`.
+    Code handed to the interpreter as a string — `-c`, or `-` — names no program this
+    product owns, and neither does a flag whose value happens to be the product's name.
+    Looking further along the line is how an editor with a path open or a test runner on
+    a path under this repository is read as this app.
+    """
+
+    if not arguments:
+        return None
+    first = arguments[0]
+    if _is_entry_point(first):
+        return first
+    if Path(first).stem.lower() not in _INTERPRETER_NAMES:
+        return None
+    index = 1
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            return None
+        if argument == "-m":
+            following = arguments[index + 1] if index + 1 < len(arguments) else ""
+            return following if _is_entry_point(following) else None
+        if argument in _INTERPRETER_FLAGS_WITH_VALUE:
+            return None
+        if argument not in _INTERPRETER_FLAGS_WITHOUT_VALUE:
+            return None
+        index += 1
+    return None
+
+
+def process_arguments(pid: int) -> list[str] | None:
+    """Return a live process's arguments, or None when they cannot be read."""
+
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
+    except OSError:
+        # A process that ended between the check above and this read is not ours to
+        # signal, and there is no portable way to ask on every system.
+        return None
+    return [part for part in raw.split("\0") if part]
+
+
+def process_storage_root(arguments: Sequence[str], environ: str) -> Path | None:
+    """Return the account a running process was told to serve, or None when unreadable.
+
+    This is the rule the app itself applies to its own inputs — the option first, then
+    the two environment names, then the default — read off the process rather than off
+    this one, so two accounts on one machine cannot be told apart by a pid file alone.
+    """
+
+    from .config import (
+        STORAGE_ENV_VAR,
+        ULTRARAG_STORAGE_ENV_VAR,
+        default_storage_root,
+    )
+
+    named = _named_value(arguments, "--storage-root")
+    if named is not None:
+        return Path(named).expanduser().resolve()
+    environment = dict(
+        pair.split("=", 1) for pair in environ.split("\0") if "=" in pair
+    )
+    for name in (STORAGE_ENV_VAR, ULTRARAG_STORAGE_ENV_VAR):
+        value = environment.get(name, "").strip()
+        if value:
+            return Path(value).expanduser().resolve()
+    return default_storage_root().expanduser().resolve()
+
+
+def _named_value(arguments: Sequence[str], option: str) -> str | None:
+    for position, argument in enumerate(arguments):
+        if argument == option and position + 1 < len(arguments):
+            return arguments[position + 1]
+        if argument.startswith(f"{option}="):
+            return argument.split("=", 1)[1]
+    return None
+
+
+def process_is_ours(pid: int, storage_root: Path) -> bool:
+    """Whether a live process is this app's own, for this account.
 
     A pid alone cannot answer this, and a wrong answer is not cosmetic: it decides
     whether ``start`` starts anything and whether ``stop`` signals a process that
-    belongs to somebody else.
+    belongs to somebody else. Two things have to hold. The process has to *be* this app
+    rather than mention it, which is the program token rather than any later argument.
+    And it has to be the app for *this* account, because a pid file can name a live app
+    of another installation and that one is not this command's to signal.
     """
 
     if not process_exists(pid):
         return False
-    try:
-        argv = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
-    except OSError:
-        # A process that ended between the check above and this read is not ours to
-        # signal, and there is no portable way to ask on every system.
+    arguments = process_arguments(pid)
+    if arguments is None or _program_of(arguments) is None:
         return False
-    arguments = [part for part in argv.split("\0") if part]
-    return any(
-        marker == Path(argument).stem or marker in Path(argument).name
-        for argument in arguments
-        for marker in PROCESS_MARKERS
-    )
+    try:
+        environ = Path(f"/proc/{pid}/environ").read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return False
+    served = process_storage_root(arguments, environ)
+    return served is not None and served == Path(storage_root).expanduser().resolve()
+
+
+def arguments_are_ours(arguments: Sequence[str]) -> bool:
+    """Whether a command line is this app's, from the arguments alone.
+
+    The process has to *be* this app rather than mention it. One of the two shapes the
+    product is started in qualifies: the executable itself as the first argument, or the
+    module named by an interpreter's ``-m``. Anything else is refused, so an unrelated
+    process whose arguments happen to contain this product's name — a shell in the
+    repository, an editor with a path open, a test runner on a path under it — is left
+    alone and read as not running.
+    """
+
+    return _program_of(arguments) is not None
+
+
+def _is_entry_point(argument: str) -> bool:
+    """Whether one argument names this app's executable or its module."""
+
+    path = Path(argument)
+    return any(name in (path.name, path.stem) for name in PROCESS_MARKERS)
 
 
 def running_pid(storage_root: Path) -> int | None:
     """The pid the launcher recorded, while that process is still this app's.
 
     A pid file outlives its process, and the number it holds is reused, so the number
-    alone is not a running app: the recorded process has to name itself as ours before
-    the record is believed.
+    alone is not a running app: the recorded process has to name itself as ours, for
+    this account, before the record is believed.
     """
 
     try:
         pid = int(pid_file(storage_root).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
-    return pid if process_is_ours(pid) else None
+    return pid if process_is_ours(pid, storage_root) else None
 
 
 def process_exists(pid: int) -> bool:
@@ -513,26 +666,169 @@ def start_app(
     }
 
 
-def stop_app(storage_root: Path) -> dict[str, Any]:
-    """Stop the app and everything it started, and report what answered."""
+def _may_be_signalled(pid: int) -> bool:
+    """Whether a signal to this pid cannot reach this command or anything above it.
 
-    script = launcher_path(storage_root)
-    if not script.is_file():
+    A stale record that names the shell running `stop`, or one of its ancestors, would
+    otherwise end the terminal the reader is holding. A group is never signalled for the
+    same reason: one `-pid` would take a reader's shell with it, and pid 0 means the
+    caller's whole process group while pid 1 is init, which is never this app.
+    """
+
+    if pid <= 1 or pid in {os.getpid(), os.getppid()}:
+        return False
+    return not _has_ancestor(pid)
+
+
+def _has_ancestor(pid: int) -> bool:
+    """Whether this process is somewhere above the one asking."""
+
+    seen: set[int] = set()
+    current = os.getpid()
+    while current > 1 and current not in seen:
+        seen.add(current)
+        if current == pid:
+            return True
+        try:
+            fields = (
+                Path(f"/proc/{current}/stat")
+                .read_text(encoding="utf-8")
+                .rsplit(")", 1)[-1]
+                .split()
+            )
+        except (OSError, IndexError):
+            return False
+        current = int(fields[1])
+    return False
+
+
+def _open_handle(pid: int) -> int | None:
+    """Return a handle that keeps this exact process reachable, or None without one.
+
+    A pidfd names the process rather than the number, so a number reused between the
+    check and the signal is a different process and the signal cannot reach it. There is
+    no fallback to the bare number: without a handle there is no proof left between the
+    check and the signal, and a proof this command cannot make is a signal it does not
+    send.
+    """
+
+    opener = getattr(os, "pidfd_open", None)
+    if opener is None:  # pragma: no cover - Python without pidfd_open
+        return None
+    try:
+        return int(opener(pid, 0))
+    except OSError:
+        return None
+
+
+def _signal_handle(handle: int, number: int) -> bool:
+    """Send one signal through a handle, and report whether it was sent."""
+
+    sender = getattr(signal, "pidfd_send_signal", None)
+    if sender is None:  # pragma: no cover - Python without pidfd_send_signal
+        return False
+    try:
+        sender(handle, number)
+    except OSError:
+        return False
+    return True
+
+
+def stop_app(storage_root: Path) -> dict[str, Any]:
+    """Stop this account's app, and report what answered.
+
+    Nothing is signalled until the recorded pid has been proved to be this app's own
+    process for this account, and the signal goes through a handle that names the
+    process rather than the number. A record that fails either test is removed and
+    reported instead, because a pid file that is stale is a fact about the file rather
+    than a reason to signal whatever the machine runs under that number now.
+    """
+
+    if not launcher_path(storage_root).is_file() and not _record_exists(storage_root):
         return {
             "running": False,
             "stopped": False,
             "note": "There is no generated launcher, so no app was started from here.",
         }
-    completed = subprocess.run(
-        [str(script), "--stop"], capture_output=True, text=True, check=False
-    )
+    try:
+        pid = int(pid_file(storage_root).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        _clear_record(storage_root)
+        return {
+            **state(storage_root),
+            "stopped": True,
+            "note": "The pid record did not hold a number, so it was removed.",
+        }
+
+    if not process_is_ours(pid, storage_root):
+        _clear_record(storage_root)
+        return {
+            **state(storage_root),
+            "stopped": True,
+            "note": (
+                f"Pid {pid} is not this account's app, so it was left alone and its "
+                "record was removed."
+            ),
+        }
+    if not _may_be_signalled(pid):
+        return {
+            **state(storage_root),
+            "stopped": False,
+            "note": (
+                f"Pid {pid} is this command or one of its ancestors, so it was not "
+                "signalled."
+            ),
+        }
+
+    handle = _open_handle(pid)
+    if handle is None:
+        return {
+            **state(storage_root),
+            "stopped": False,
+            "note": (
+                "This kernel or Python has no process handle (Linux 5.3 with Python "
+                "3.9 or newer), so the app was left running rather than signalled by a "
+                "number nothing proved."
+            ),
+        }
+    try:
+        # The handle pins the process, so this is a signal to the process that was
+        # proved and not to a number that has since been handed to somebody else.
+        sent = _signal_handle(handle, signal.SIGTERM)
+        deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+        while sent and process_exists(pid) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if sent and process_exists(pid):
+            sent = _signal_handle(handle, signal.SIGKILL)
+            waited = time.monotonic() + STOP_TIMEOUT_SECONDS
+            while sent and process_exists(pid) and time.monotonic() < waited:
+                time.sleep(0.2)
+    finally:
+        os.close(handle)
+
+    stopped = sent and not process_exists(pid)
+    if stopped:
+        _clear_record(storage_root)
     return {
         **state(storage_root),
-        "stopped": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout.strip(),
-        "stderr": completed.stderr.strip(),
+        "stopped": stopped,
+        "note": (
+            f"Stopped the app with pid {pid}."
+            if stopped
+            else f"Pid {pid} ignored SIGTERM and SIGKILL; remove it by hand."
+        ),
     }
+
+
+def _record_exists(storage_root: Path) -> bool:
+    return pid_file(storage_root).is_file() or port_file(storage_root).is_file()
+
+
+def _clear_record(storage_root: Path) -> None:
+    """Forget a pid and a port, so nothing reads them as a running app."""
+
+    pid_file(storage_root).unlink(missing_ok=True)
+    port_file(storage_root).unlink(missing_ok=True)
 
 
 __all__ = [
@@ -541,8 +837,10 @@ __all__ = [
     "LAUNCHER_NAME",
     "LINK_NAME",
     "LOG_NAME",
+    "PROCESS_MARKERS",
     "STATE_DIRNAME",
     "STOP_TIMEOUT_SECONDS",
+    "arguments_are_ours",
     "ensure_launcher",
     "ensure_link",
     "launcher_is_current",
@@ -552,7 +850,10 @@ __all__ = [
     "log_path",
     "pid_file",
     "port_file",
+    "process_arguments",
     "process_exists",
+    "process_is_ours",
+    "process_storage_root",
     "recorded_port",
     "running_pid",
     "running_url",

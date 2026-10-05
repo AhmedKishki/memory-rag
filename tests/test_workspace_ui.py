@@ -35,6 +35,20 @@ from memory_rag.surfaces.workspace import (
     create_ui_app,
 )
 
+#: The address a browser reaching this app directly sends. The app refuses a request
+#: whose `Host` names anything else, and Starlette's own default is `testserver`.
+LOOPBACK_BASE_URL = "http://127.0.0.1:8765"
+#: The peer a real request arrives from. The test transport reports itself as
+#: `testclient`, which is not a loopback peer, and the write guard requires one.
+LOOPBACK_TEST_CLIENT = ("127.0.0.1", 50000)
+
+
+def _client(app: Any, **kwargs: Any) -> TestClient:
+    """Return a test client that reaches the app as a browser on its own address would."""
+
+    kwargs.setdefault("client", LOOPBACK_TEST_CLIENT)
+    return TestClient(app, base_url=LOOPBACK_BASE_URL, **kwargs)
+
 
 class ClientControlAdapter:
     """An adapter that can report and end the clients attached to its host."""
@@ -80,7 +94,7 @@ class ClientControlAdapter:
 
 
 def _host(adapter: Any, *, enabled: bool = True) -> TestClient:
-    return TestClient(
+    return _client(
         create_ui_app(
             profile=UIProfile(
                 application_name="Client host",
@@ -124,7 +138,7 @@ def _project_host() -> TestClient:
                 return {"entry": '{\n  "mcp": {}\n}\n'}
             return await super().call(operation, arguments)
 
-    return TestClient(
+    return _client(
         create_ui_app(
             profile=UIProfile(
                 application_name="Project host",
@@ -288,7 +302,7 @@ class SqlConsoleHost:
 
 
 def _sql_host(*, enabled: bool) -> TestClient:
-    return TestClient(
+    return _client(
         create_ui_app(
             profile=UIProfile(
                 application_name="SQL host",
@@ -307,7 +321,7 @@ def test_the_status_view_carries_the_sql_console_panel() -> None:
         script = client.get("/assets/app.js")
 
     assert (
-        'id="sql-console" class="partition-summary" data-capability="sql_console" hidden'
+        'id="sql-console" class="panel-section" data-capability="sql_console" hidden'
         in page.text
     )
     assert 'id="sql-scope"' in page.text
@@ -445,7 +459,7 @@ class SettingsHost:
 
 
 def _panel_host() -> TestClient:
-    return TestClient(
+    return _client(
         create_ui_app(
             profile=UIProfile(
                 application_name="Settings host",
@@ -473,9 +487,11 @@ def test_the_config_tab_carries_the_settings_panel_and_its_confirmation() -> Non
     assert 'id="settings-confirm-dialog"' in page
     assert 'id="settings-confirm-word"' in page
     assert 'hasCapability("settings")' in script
-    # It left the status section, and nothing is left behind there to show it
-    # twice.
-    assert page.index('id="settings-panel"') < page.index("system-summary")
+    # Settings are the whole Config view. They are not repeated inside the status
+    # view, so a reader who edits one sees one copy of every value.
+    status_view = page.split('id="status-view"', 1)[1].split('id="config-view"', 1)[0]
+    assert "settings-form" not in status_view
+    assert "settings-panel" not in status_view
 
 
 def test_the_settings_panel_reads_the_shape_the_server_sends() -> None:
@@ -532,7 +548,7 @@ def test_the_workspace_carries_the_chunk_exclusion_controls() -> None:
         script = client.get("/assets/app.js").text
 
     assert (
-        'id="chunk-exclusion-summary" class="partition-summary"'
+        'id="chunk-exclusion-summary" class="panel-section"'
         ' data-capability="chunk_exclusion"' in page.text
     )
     assert 'id="chunk-exclusion-list"' in page.text
@@ -567,9 +583,11 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
     assert items == [
         ("search", "documents"),
         ("sources", "sources"),
+        ("status", "documents"),
         ("config", "settings"),
         ("mcp", "clients"),
         ("memory", "memory"),
+        ("updates", "updates"),
     ]
     # Every item has a panel, and every panel is reached by exactly one item.
     panels = re.findall(r'data-panel="([^"]+)" data-capability="([^"]+)"', page)
@@ -578,6 +596,9 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
     # A profile that leaves no item shows no panel rather than the panel of an
     # item that is gone.
     assert "switchView(activeItem ? activeItem.dataset.view : null);" in script
+    # A host whose marked view is switched off still opens on something a reader
+    # can reach, rather than on a page with every panel hidden.
+    assert "|| visibleNavItems[0];" in script
     # No id is declared twice: a second copy of a panel is a second place for it
     # to be wrong, and a duplicated id would silently pick the first one.
     identifiers = re.findall(r'\bid="([^"]+)"', page)
@@ -600,7 +621,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     assert 'data-view="search" data-capability="documents"' in page
     assert 'class="sidebar-list"' in page
     # One item per view, and the item is a button rather than a tab role.
-    assert page.count('<button class="nav-item') == 5
+    assert page.count('<button class="nav-item') == 7
     assert 'role="tab"' not in page
     assert "aria-selected" not in page
     # The current view is marked as the current page, and only one is.
@@ -614,15 +635,16 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
         in script
     )
     # The item the markup marks active is the item the profile loop looks for, so
-    # the first view is the one the column shows rather than no view at all.
-    assert 'class="sidebar-item is-active" data-view="search"' in page
+    # the view the column shows is one this host can actually open. This app
+    # serves no documents, so Search is switched off and Memory is the default.
+    assert 'class="sidebar-item is-active" data-view="memory"' in page
+    assert 'class="sidebar-item" data-view="search"' in page
     assert (
-        'const activeItem = visibleNavItems.find((item) => item.classList.contains("is-active"));'
-        in script
+        'visibleNavItems.find((item) => item.classList.contains("is-active"))' in script
     )
     # An icon is inline SVG rather than an icon font or a fetched file, so the
     # page adds no request and no dependency.
-    assert page.count('<svg class="nav-item-icon"') == 5
+    assert page.count('<svg class="nav-item-icon"') == 7
     assert "http://" not in page
     # The column is keyboard operable with a visible focus ring, and the project
     # is repeated as a quiet footer beneath the views.
@@ -909,7 +931,7 @@ def test_a_settings_row_carries_its_description_value_origin_and_cost() -> None:
     assert "control.disabled = !setting.writable" in script
     # The row is a grid that wraps rather than one that truncates.
     assert ".setting-row {" in css
-    assert "grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);" in css
+    assert "grid-template-columns: minmax(0, 1fr) minmax(0, 18rem);" in css
     assert ".setting-doc {" in css
 
 
@@ -940,7 +962,7 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
     """
 
     adapter = ClientControlAdapter()
-    client = TestClient(
+    client = _client(
         create_ui_app(
             profile=UIProfile(
                 application_name="Bare host",
@@ -967,12 +989,15 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
     for panel, capability in (
         ("search", "documents"),
         ("sources", "sources"),
+        ("status", "documents"),
         ("config", "settings"),
         ("mcp", "clients"),
         ("memory", "memory"),
     ):
-        assert f'data-panel="{panel}" data-capability="{capability}"' in page
-    assert 'class="system-summary" data-capability="documents"' in page
+        assert re.search(
+            rf'data-panel="{panel}"\s+data-capability="{capability}"', page
+        )
+    assert 'class="view-panel system-summary"' in page
     # The loop that hides by capability is the only thing that decides an item,
     # and what it leaves is handled rather than ignored.
     hide = script.split("function applyProfile(")[1].split("\n}\n")[0]
@@ -1034,7 +1059,7 @@ def test_the_mcp_tab_carries_a_copyable_client_entry() -> None:
         page = client.get("/")
         script = client.get("/assets/app.js")
 
-    assert 'id="agent-entry-summary" class="partition-summary"' in page.text
+    assert 'id="agent-entry-summary" class="panel-section"' in page.text
     assert 'data-capability="agent_entry"' in page.text
     assert 'id="agent-entry" class="standing-document"' in page.text
     assert 'id="agent-entry-copy"' in page.text
@@ -1043,7 +1068,220 @@ def test_the_mcp_tab_carries_a_copyable_client_entry() -> None:
     # The text reaches the block and the clipboard unedited, and no generator is
     # built here: a second one would be a second place for a client's
     # configuration to be wrong.
-    assert 'byId("agent-entry").textContent = state.agentEntry' in script.text
+    assert (
+        'byId("agent-entry").textContent = readableEntry(state.agentEntry)'
+        in script.text
+    )
     assert 'copyText(state.agentEntry, "Client entry copied.")' in script.text
     # It is the stdio entry, so the block says which client it is for.
     assert "for a client that cannot open a socket" in page.text.lower()
+
+
+def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
+    """Each job is reached from one place, and no panel is a second copy of another.
+
+    The complaint was a page that put every management block under every view, so
+    a reader who opened Config also got the generation list and the clients. Each
+    block now sits in the panel its work belongs to, and the test reads them back
+    out of the markup rather than trusting the navigation order.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+
+    panels = {
+        name.removesuffix("-view"): body
+        for name, body in re.findall(
+            r'<section id="([a-z-]+-view)"(?:\s[^>]*)?>(.*?)</section>\s*(?=<section|<dialog|</main)',
+            page,
+            flags=re.DOTALL,
+        )
+    }
+    assert set(panels) == {
+        "search",
+        "sources",
+        "status",
+        "config",
+        "mcp",
+        "memory",
+        "updates",
+    }
+    # The filters and the lists that fill them are one job, and both are in the
+    # search view: a box whose values are listed three panels away is a box that
+    # asks the reader to know what it already knows.
+    for element in (
+        'id="filter-section"',
+        'id="filter-fields"',
+        'id="partition-chips"',
+        'id="project-chips"',
+        'id="language-chips"',
+    ):
+        assert element in panels["search"]
+    # The build and its generations are the facts about what is stored.
+    for element in (
+        'id="status-cards"',
+        'id="status-message"',
+        'id="status-facts"',
+        'id="generation-summary"',
+    ):
+        assert element in panels["status"]
+    # Settings stay the whole Config view, and the clients the whole MCP view.
+    assert 'id="settings-panel"' in panels["config"]
+    for element in (
+        'id="client-summary"',
+        'id="agent-endpoint"',
+        'id="agent-entry-summary"',
+    ):
+        assert element in panels["mcp"]
+
+
+def test_the_status_view_is_gated_on_documents_and_opens_on_a_view_the_host_serves() -> (
+    None
+):
+    """The status panel and its nav item share one capability, and the default opens.
+
+    A panel reached by an item this host cannot serve is a way into a page with
+    nothing in it, so the two carry the same gate and the marked default is a view
+    this app's own profile leaves switched on.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        capabilities = client.get("/api/ui").json()["capabilities"]
+        page = client.get("/").text
+
+    assert capabilities["documents"] is True
+    assert 'data-panel="status" data-capability="documents"' in page
+    assert 'data-view="status" data-capability="documents"' in page
+    assert 'id="status-view"' in page
+    # The default view is one this app serves, because a profile whose marked view
+    # is switched off would otherwise leave every panel hidden.
+    assert 'class="sidebar-item is-active" data-view="memory"' in page
+    assert 'class="view-panel is-active" data-panel="memory"' in page
+    assert 'class="sidebar-item" data-view="search"' in page
+    assert (
+        'class="view-panel" data-panel="search" data-capability="documents" hidden'
+        in page
+    )
+
+
+def test_a_chosen_view_takes_the_focus_and_the_narrow_window_keeps_it_reachable() -> (
+    None
+):
+    """The focus follows the choice, and every control keeps a pointer's size.
+
+    A view panel takes the focus when a reader chooses it from the column, so a
+    keyboard reader lands on the view rather than on the sidebar they just left,
+    and the first render does not take the focus from wherever the page opened.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        script = client.get("/assets/app.js").text
+    css = client_css()
+
+    assert "switchView(item.dataset.view, { moveFocus: true });" in script
+    assert "panel.tabIndex = -1;" in script
+    assert "opened.focus({ preventScroll: true });" in script
+    for breakpoint in ("991.98px", "767.98px", "575.98px"):
+        assert f"@media (max-width: {breakpoint}) {{" in css
+    assert ".workspace {\n    padding: var(--space-sm);" in css
+    # A labelled pair becomes two lines rather than two squeezed columns.
+    assert ".fact-list {\n    grid-template-columns: minmax(0, 1fr);" in css
+    # The new components are declared once, in the place they belong, rather than
+    # appended as an override block at the end of the file.
+    for selector in (
+        ".panel-section {",
+        ".record-list,",
+        ".client-list {",
+        ".fact-list {",
+        ".filter-group {",
+        ".status-message {",
+    ):
+        assert selector in css
+
+
+def test_identifiers_are_shown_whole_behind_one_labelled_disclosure() -> None:
+    """An identifier is shortened for a badge and never for a copy.
+
+    A generation id, a passage id, and a per-component score are what a reader
+    checks when a result looks wrong, so each is shown in full, labelled, and
+    selectable inside one disclosure rather than compressed under the passage.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert (
+        'byId("generation-label").textContent = status.generation_id || "None yet";'
+        in script
+    )
+    assert 'rows.push(["Passage identifier", hit.chunk_id]);' in script
+    assert 'scorePair("Fusion score", hit.fusion_score)' in script
+    assert "Scores and identifiers" in script
+    assert "Path and identifier" in script
+    assert 'factList(rows, "fact-list score-facts")' in script
+    assert "compactId(hit.chunk_id)" not in script
+    assert ".detail-drawer," in css and ".identifier-drawer {" in css
+    assert ".fact-list {" in css
+    assert 'id="status-facts" class="fact-list"' in page
+    assert 'id="status-details" class="detail-drawer"' in page
+
+
+def test_the_server_s_own_sentence_about_the_project_is_never_dropped() -> None:
+    """The status message carries sentences the cards cannot.
+
+    It is shown whenever the server sent one, including when nothing is urgent,
+    because a panel that drops it when the project is healthy hides exactly the
+    conditions it was written for.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert 'id="status-message" class="status-message" hidden' in page
+    assert 'message.textContent = status.message || "";' in script
+    assert "message.hidden = !status.message;" in script
+    status_view = page.split('id="status-cards"', 1)[1]
+    assert status_view.index('id="status-message"') < status_view.index(
+        'id="status-details"'
+    )
+    assert ".status-message {" in client_css()
+
+
+def test_a_build_that_can_be_continued_says_so_and_one_that_cannot_says_nothing() -> (
+    None
+):
+    """Whether a build resumes is the host's own fact about its own pipeline.
+
+    A shared page cannot claim it for a host that does not checkpoint, so the
+    sentence arrives with the profile and the block is empty until it does.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        ui = client.get("/api/ui").json()
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert "ingest_resume_note" in ui
+    assert not ui["ingest_resume_note"]
+    assert 'id="ingest-note" class="form-note dialog-note" hidden' in page
+    assert 'ingestNote.textContent = profile.ingest_resume_note || "";' in script
+    assert "ingestNote.hidden = !profile.ingest_resume_note;" in script
+    assert "The current generation" in page
+    assert "remains active unless the complete build succeeds" in page
+
+
+def test_the_page_carries_no_private_project_or_source_names() -> None:
+    """The placeholders in a shared page are written for any installation.
+
+    A category or project name typed into a placeholder ships one reader's corpus
+    to every other reader of the same package.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/").text
+
+    for name in ("ai-and-fetishism", "fetishism", "Crawford", "Gidwani", "Atlas of AI"):
+        assert name not in page

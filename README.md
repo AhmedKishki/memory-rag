@@ -3,13 +3,12 @@
 A command center for an account's global memory and every project's local memory, served from one process on one loopback port.
 
 - An agent's memory is usually only reachable by an agent. `memory-rag` makes the same records readable and editable by a person, and gives an agent no more power than it already had.
-- One process holds the account's global memory and the local memory of every registered project, and serves all of them at once.
 - An agent gets one recording tool and one recall tool per kind, so what it is doing is named by the tool it calls, plus a recall that answers across every kind and a forget that removes a statement whatever kind filed it. It cannot see the SQL panel, the project list, or the clients.
 - A command line reaches everything the workspace does, against the same process.
 
 ## What it does
 
-- **Two kinds of memory.** `global` is the account's, in the storage root, and every project reads it. `local` is one project's, inside that project's repository, and no other project reaches it.
+- **Two memories.** `global` is the account's, in the storage root, and every project reads it. `local` is one project's, inside that project's repository, and no other project reaches it.
 - **A recall that ranks across both.** A question is answered by the best statement from whichever memory holds it, not by one memory's answer followed by the other's.
 - **A workspace that shows every memory at once**, with the statement count and the file each memory's record lives in.
 - **A SQL panel** that reads freely and writes statements only. See [The SQL panel](#the-sql-panel).
@@ -86,6 +85,9 @@ memory-rag handoff "Done: the SQL console. In flight: the workspace panel. Next:
 
 `forget` matches the exact text of one statement and refuses an ambiguous one, naming the statements that matched.
 
+- Recording requires `--kind`; `ITEM` is reserved for legacy imports.
+- Recall accepts an integer `--limit` from 1 to 50.
+
 ## The SQL panel
 
 The workspace and the command line can both read a memory's record directly, and a read is unrestricted:
@@ -101,7 +103,7 @@ memory-rag sql --scope your-project --execute \
   "UPDATE unit SET kind = 'CORRECTION' WHERE kind = 'RULE'"
 ```
 
-- `INSERT`, `UPDATE`, and `DELETE` against the `unit` table are accepted.
+- `INSERT`, `REPLACE`, `UPDATE`, and `DELETE` against the `unit` table are accepted.
 - `DROP`, `CREATE`, `ALTER`, `PRAGMA`, `ATTACH`, `VACUUM`, and anything writing `meta` or `vector` are refused by name.
 - A single statement is accepted per run.
 - An accepted write rewrites the standing document, drops the vectors of the statements it changed so they are embedded again, and says what it reindexed.
@@ -154,13 +156,19 @@ memory-rag sql --scope your-project --execute \
 }
 ```
 
-The entry names a project rather than a path, because a configuration is written once and copied between machines. Either transport names itself, so `memory-rag clients` shows which agent is attached:
+The project name is portable; custom executable and storage-root paths remain machine-local.
+
+- A named stdio bridge refuses an unregistered project or an app serving a different active project.
+  - Start the desired project with `memory-rag --project your-project start` before connecting.
+  - Tools take no project argument; one app has one active project for local writes.
+
+List attached clients:
 
 ```bash
 memory-rag clients
 ```
 
-The command prints the entry this machine needs, with its own executable and storage root filled in:
+It also prints the client entry this machine needs, with its own executable and storage root filled in:
 
 ```bash
 memory-rag mcp-entry --project your-project
@@ -191,13 +199,15 @@ It reads only: it writes nothing, fetches no model, and starts no process, so it
 ## Limitations
 
 - A memory holds statements, not documents. There is no corpus, no ingestion, and no original file to open beside a statement.
-- A statement states what holds, and carries no date. The memory dates every statement itself and a recall reports that date, so every recorder refuses a statement that writes one out. Work finished in a session belongs in `record_memory_handoff`, which holds one and replaces it with the next.
-- The set of kinds is closed. A word that is not one of the ten is refused with the list beside it, because a kind nothing interprets is a category a later recall cannot ask for. A read stays permissive, so statements an earlier version filed under a kind this set does not name are still found.
-- The standing document is a rendering. Editing it is refused, because the next read rewrites it from the record.
-- The SQL panel is for repairing and inspecting a memory by hand. The four tools remain the way a statement is normally recorded.
+- A statement states what holds and carries no date; the memory dates every statement itself, and a recall reports that date. Work finished in a session belongs in `record_memory_handoff`, which holds one and replaces it with the next.
+- The set of kinds is closed on a write and open on a read. A word that is not one of the ten is refused with the list beside it; a statement an earlier version filed under a kind this set does not name is still found.
+- The standing document is a rendering, not an editable record; a later export or workspace rendering overwrites hand edits.
+- The SQL panel is for repairing and inspecting a memory by hand. The tools remain the way a statement is normally recorded.
 - One app per account. A second process over the same account would hold its own copy of every memory, so the port claim refuses a second one.
 - The semantic side is unmeasured here. A read that falls back to matching words alone says so in its answer.
-- The project record is a pointer. A project whose directory is moved has to be registered again, because the record points at where it was.
+- The project record is a pointer, so a project whose directory is moved has to be registered again.
+- `local` and `global` are reserved scope aliases, not names for newly registered projects.
+- Loopback is not authentication; use a trusted machine where other local processes and users may reach the app's port.
 
 ## UltraRAG credit and licensing
 

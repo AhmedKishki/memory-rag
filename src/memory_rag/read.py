@@ -144,7 +144,12 @@ def collapse_repetitions(
         if any(normalized == held for held in kept_text):
             collapsed.append({**stated, "collapsed_by": "same words"})
             continue
-        if vector is not None:
+        # An empty vector is a statement whose embedding is not ready, not a statement
+        # whose meaning is the zero vector: there is nothing to compare, so only the
+        # words test above applies to it. Comparing it would make two unembedded
+        # statements alike at a similarity of nothing whenever the cosine threshold is
+        # zero, which is the setting that turns the comparison off.
+        if vector:
             score = _nearest(vector, kept_vectors, threshold)
             if score is not None:
                 collapsed.append(
@@ -155,7 +160,7 @@ def collapse_repetitions(
             break
         kept.append(stated)
         kept_text.append(normalized)
-        if vector is not None:
+        if vector:
             kept_vectors.append(vector)
     return kept, collapsed
 

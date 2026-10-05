@@ -20,7 +20,9 @@ available, and a read reports that it is behind rather than pretending otherwise
 
 from __future__ import annotations
 
+import logging
 import queue
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -28,9 +30,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .index import MemoryIndex
+from .index import RENDERED_FILENAME, MemoryIndex
 from .models import Embedder, ModelError
+from .store import StoreError
 from .vectors import VectorStore
+
+LOGGER = logging.getLogger(__name__)
 
 #: How long the worker waits for work when nothing is wrong. It bounds how long a
 #: stopped or idle worker notices `stop`, and nothing else.
@@ -72,10 +77,10 @@ class EmbeddingWorker:
     One queue and one thread for the whole process, because a memory has one
     scope at a time here and a second worker would fight the first over the same
     SQLite file. A unit is embedded once: the queue is drained, the model is
-    called with a batch, and the vectors are written. If the model is not
-    available the batch is put back and the worker waits before trying again, so
-    a missing model costs one wakeup per interval rather than a core, and the
-    next write or an explicit reindex clears the wait and retries at once.
+    called with a batch, and the vectors are written. If the model or the storage
+    is not available the batch is put back and the worker waits before trying
+    again, so a missing model costs one wakeup per interval rather than a core, and
+    the next write or an explicit reindex clears the wait and retries at once.
     """
 
     def __init__(self, embedder: Embedder, scope_directory: Path) -> None:
@@ -96,6 +101,9 @@ class EmbeddingWorker:
         #: it the thread re-tried a missing model as fast as it could fail, which
         #: measured at over a million attempts in two seconds.
         self._retry_after = 0.0
+        #: Whether the worker is in a run of failures, so a condition is reported
+        #: once rather than once per attempt. A write or a success ends the run.
+        self._failing = False
         self._idle.set()
 
     @property
@@ -127,6 +135,7 @@ class EmbeddingWorker:
         self.start()
         with self._lock:
             self._retry_after = 0.0
+            self._failing = False
         self._idle.clear()
         self._queue.put(unit)
 
@@ -182,7 +191,16 @@ class EmbeddingWorker:
             if item is None:
                 self._idle.set()
                 return
-            self._embed_one(item)
+            try:
+                self._embed_one(item)
+            except (OSError, sqlite3.Error, StoreError) as error:
+                # A worker that dies takes the queue with it: the unit is gone from
+                # the queue, the thread is gone with it, and every later write is
+                # queued for a thread that no longer exists — one storage error, and
+                # the meaning side of this process is off for good. So a failure of
+                # the lookup layer is handled as a missing model is: the unit goes
+                # back, the retry waits, and the read discloses what is pending.
+                self._requeue(item, error)
             if self._queue.empty():
                 self._idle.set()
 
@@ -192,26 +210,56 @@ class EmbeddingWorker:
         with self._lock:
             return max(self._retry_after - time.monotonic(), 0.0)
 
+    def _requeue(self, unit: PendingUnit, reason: Exception | None = None) -> None:
+        """Put a unit back, wait before the next attempt, and say what failed.
+
+        The unit stays queued so the statement is picked up by the next write or an
+        explicit reindex, and the wait is what keeps a failure costing one attempt
+        per interval. The reason is reported once per run of failures rather than
+        once per attempt, so a model or a file that is simply not there says so in
+        the app's log without repeating itself all day. A read says the same thing
+        in `units_pending`.
+        """
+
+        if self._stopping:
+            self._idle.set()
+            return
+        with self._lock:
+            first = not self._failing
+            self._failing = True
+        if reason is not None and first:
+            LOGGER.warning(
+                "memory-embedding: %s was not embedded (%s); it stays pending and is "
+                "retried every %ss",
+                unit.key[:12],
+                reason,
+                f"{RETRY_SECONDS:.0f}",
+            )
+        self._queue.put(unit)
+        self._idle.clear()
+        with self._lock:
+            self._retry_after = time.monotonic() + RETRY_SECONDS
+
+    def _settled(self) -> None:
+        """End a run of failures, because this unit is dealt with however it happened."""
+
+        with self._lock:
+            self._retry_after = 0.0
+            self._failing = False
+
     def _embed_one(self, unit: PendingUnit) -> None:
         try:
             vectors = self._embedder.embed_documents([unit.text])
-        except ModelError:
+        except ModelError as error:
             # The model is not available. Put the unit back, wait before the next
             # attempt, and let a later write or a reindex retry it — unless the
             # worker is stopping, because a unit put back behind the `None` at the
             # end of the queue is one the thread would take out again and again,
             # and `stop` would wait out its timeout and leave it spinning.
-            if self._stopping:
-                self._idle.set()
-                return
-            self._queue.put(unit)
-            self._idle.clear()
-            with self._lock:
-                self._retry_after = time.monotonic() + RETRY_SECONDS
+            self._requeue(unit, error)
             return
-        with self._lock:
-            self._retry_after = 0.0
         if not vectors:
+            self._settled()
             return
         identity = self._embedder.identity
         with VectorStore(
@@ -223,10 +271,13 @@ class EmbeddingWorker:
                     vectors[0],
                     stamp=unit.stamp,
                     kind=unit.kind,
+                    expected_text=unit.text,
                 )
             except ValueError:
                 # Another model's file: leave it for reindex rather than mixing.
+                self._settled()
                 return
+        self._settled()
 
 
 def _pending(index: MemoryIndex, key: str) -> PendingUnit:
@@ -295,10 +346,17 @@ def reindex(
         with MemoryIndex(scope_directory) as index:
             adopted = index.adopt_document_if_empty()
             retired = index.retire_superseded(render=retire_document)
+            if retired and RENDERED_FILENAME in retired:
+                # Retiring the rendering removes the file, and the record it was written
+                # from is what a person opens to read a memory, so it is written again.
+                store_rendered = str(index.write_render())
+            else:
+                store_rendered = ""
             units = index.unit_keys()
             store_report: dict[str, Any] = {
                 "adopted_from_document": adopted,
                 "superseded_removed": retired,
+                "rendered": store_rendered,
                 "units": len(units),
             }
             missing = set()

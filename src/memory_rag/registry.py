@@ -34,6 +34,11 @@ from .settings import USER_CONFIG_DIRECTORY
 REGISTRY_FILE = "projects.json"
 SCHEMA_VERSION = 1
 
+#: The names a project may not be recorded under, because the product uses them for a
+#: memory rather than for a project: `local` is the project this session is working in,
+#: `global` is the account's.
+RESERVED_NAMES = ("local", "global")
+
 
 def registry_path() -> Path:
     """Return where the account's project record lives."""
@@ -155,14 +160,28 @@ def register(
     Re-registering a project refreshes its name and root rather than adding a second
     entry, so ``init`` is safe to run again and a project that moved is followed to
     where it went.
+
+    ``local`` and ``global`` are refused, because those two words are how the product
+    itself addresses a memory: ``local`` is the project this session is working in and
+    ``global`` is the account's. A project recorded under one of them would answer to
+    both, and a tool that takes no project argument could not say which memory it wrote
+    to.
     """
 
+    name = str(project_name).strip()
+    if name.casefold() in RESERVED_NAMES:
+        raise RegistryError(
+            f"{name!r} is one of the two words this product uses for a memory: "
+            f"'local' is the project this session is working in and 'global' is the "
+            "account's, and a project may not answer to either. Pass another name, "
+            "which is what an agent's client entry carries."
+        )
     path = registry_path()
     document = _read(path)
     root = str(Path(project_root).expanduser().resolve())
     entry = RegisteredProject(
         project_id=project_id,
-        project_name=project_name,
+        project_name=name,
         project_root=Path(root),
         registered_at=_utc_now(),
     )
@@ -278,6 +297,7 @@ def _utc_now() -> str:
 
 __all__ = [
     "REGISTRY_FILE",
+    "RESERVED_NAMES",
     "SCHEMA_VERSION",
     "RegisteredProject",
     "RegistryError",

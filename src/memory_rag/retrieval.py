@@ -245,9 +245,9 @@ class Retrieval:
         """Record one statement in one memory, and say what was filed where.
 
         The statement is a row: its text, the kind it is filed under, its place at the
-        top of the document, and the time it was recorded. The document is then
-        written out from the record, because a memory nobody can open is not one
-        anybody can check.
+        top of the document, and the time it was recorded. The rendering is left as it
+        is: it is written from the record when something asks for it — `export`, or the
+        page — and a write here does not rewrite it.
 
         Two things are refused before the row is written, and both are refused on the
         statement's own words rather than on anything derived, so the same text is

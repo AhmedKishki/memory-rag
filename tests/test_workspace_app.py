@@ -14,6 +14,20 @@ from memory_rag.surfaces.workspace import (
     create_ui_app,
 )
 
+#: The address a browser reaching this app directly sends. The app refuses a request
+#: whose `Host` names anything else, and Starlette's own default is `testserver`.
+LOOPBACK_BASE_URL = "http://127.0.0.1:8765"
+#: The peer a real request arrives from. The test transport reports itself as
+#: `testclient`, which is not a loopback peer, and the write guard requires one.
+LOOPBACK_TEST_CLIENT = ("127.0.0.1", 50000)
+
+
+def _client(app: Any, **kwargs: Any) -> TestClient:
+    """Return a test client that reaches the app as a browser on its own address would."""
+
+    kwargs.setdefault("client", LOOPBACK_TEST_CLIENT)
+    return TestClient(app, base_url=LOOPBACK_BASE_URL, **kwargs)
+
 
 class FakeAdapter:
     def __init__(self, source: Path) -> None:
@@ -262,7 +276,7 @@ class SqlRecordAdapter(FakeAdapter):
 
 
 def _sql_host(adapter: Any, *, enabled: bool = True) -> TestClient:
-    return TestClient(
+    return _client(
         create_ui_app(profile=_profile(sql_console=enabled), adapter=adapter)
     )
 
@@ -279,7 +293,7 @@ def test_workspace_and_normalized_read_operations(tmp_path: Path) -> None:
     adapter = FakeAdapter(source)
     app = create_ui_app(profile=_profile(), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         page = client.get("/")
         stylesheet = client.get("/assets/app.css")
         script = client.get("/assets/app.js")
@@ -324,7 +338,7 @@ def test_source_selection_and_partitions_are_forwarded(tmp_path: Path) -> None:
         adapter=adapter,
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         partitions = client.get("/api/sources?categories_any=theory,history")
         projects = client.get("/api/sources?projects_any=ai-and-fetishism")
         search = client.post(
@@ -400,7 +414,7 @@ def test_writes_and_source_file_are_constrained(tmp_path: Path) -> None:
     adapter = FakeAdapter(source)
     app = create_ui_app(profile=_profile(), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         search = client.post("/api/search", json={"query": "evidence", "top_k": 5})
         metadata = client.post(
             "/api/source-metadata",
@@ -452,7 +466,7 @@ def test_force_recompute_is_capability_gated_and_forwarded(tmp_path: Path) -> No
         adapter=adapter,
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         ingestion = client.post(
             "/api/ingest",
             json={
@@ -499,7 +513,7 @@ def test_disabled_capabilities_are_reported_and_enforced(tmp_path: Path) -> None
     )
     app = create_ui_app(profile=profile, adapter=FakeAdapter(source))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         ui = client.get("/api/ui")
         sources = client.get("/api/sources")
         ingest = client.post("/api/ingest", json={})
@@ -570,7 +584,7 @@ def test_bundle_actions_are_capability_gated_and_forwarded(tmp_path: Path) -> No
         adapter=adapter,
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         exported = client.post("/api/bundles/export", json={})
         imported = client.post(
             "/api/bundles/import",
@@ -625,7 +639,7 @@ def test_version_label_defaults_to_empty(tmp_path: Path) -> None:
     source.write_bytes(b"%PDF-1.4\n% test\n")
     app = create_ui_app(profile=_profile(), adapter=FakeAdapter(source))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         payload = client.get("/api/ui").json()
 
     assert payload["version_label"] == ""
@@ -640,7 +654,7 @@ def test_version_label_is_served_and_rendered(tmp_path: Path) -> None:
     )
     app = create_ui_app(profile=profile, adapter=FakeAdapter(source))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         payload = client.get("/api/ui").json()
         page = client.get("/")
         script = client.get("/assets/app.js")
@@ -668,7 +682,7 @@ def test_a_memory_only_adapter_hides_the_document_workspace(tmp_path: Path) -> N
         adapter=adapter,
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         payload = client.get("/api/ui").json()
         page = client.get("/")
         search = client.post("/api/search", json={"query": "evidence"})
@@ -693,7 +707,7 @@ def test_bibliographic_filters_are_capability_gated_and_forwarded(
     adapter = FakeAdapter(source)
     app = create_ui_app(profile=_profile(bibliographic_filters=True), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         search = client.post(
             "/api/search",
             json={
@@ -729,7 +743,7 @@ def test_a_language_filter_is_refused_where_the_capability_is_off(
     adapter = FakeAdapter(source)
     app = create_ui_app(profile=_profile(), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         language = client.post(
             "/api/search", json={"query": "evidence", "languages_any": ["en"]}
         )
@@ -753,7 +767,7 @@ def test_the_quotation_rule_is_not_a_footer(tmp_path: Path) -> None:
     source.write_bytes(b"%PDF-1.4\n% test\n")
     app = create_ui_app(profile=_profile(), adapter=FakeAdapter(source))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         profile = client.get("/api/ui")
         page = client.get("/")
         javascript = client.get("/assets/app.js")
@@ -775,7 +789,7 @@ def test_every_capability_is_declared_in_the_markup_and_named_in_the_loop(
     source.write_bytes(b"%PDF-1.4\n% test\n")
     app = create_ui_app(profile=_profile(), adapter=FakeAdapter(source))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         page = client.get("/")
         javascript = client.get("/assets/app.js")
 
@@ -826,7 +840,7 @@ def test_memory_view_is_capability_gated_and_forwarded(tmp_path: Path) -> None:
         adapter=adapter,
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         status = client.get("/api/memory")
         rounds = client.get("/api/memory/rounds?scope=local&limit=5")
         standing = client.get("/api/memory/standing?scope=global:ahmed")
@@ -882,7 +896,7 @@ def test_memory_operations_are_capability_gated(tmp_path: Path) -> None:
         "assistant_message": "Remembered.",
     }
 
-    with TestClient(create_ui_app(profile=_profile(), adapter=adapter)) as client:
+    with _client(create_ui_app(profile=_profile(), adapter=adapter)) as client:
         hidden = [
             client.get("/api/memory"),
             client.get("/api/memory/rounds?scope=local"),
@@ -894,7 +908,7 @@ def test_memory_operations_are_capability_gated(tmp_path: Path) -> None:
             ),
         ]
 
-    with TestClient(
+    with _client(
         create_ui_app(profile=_profile(memory=True), adapter=adapter)
     ) as client:
         readable = client.get("/api/memory")
@@ -915,7 +929,7 @@ def test_memory_writes_are_validated(tmp_path: Path) -> None:
         adapter=adapter,
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         no_scope = client.post(
             "/api/memory/append",
             json={"user_message": "a", "assistant_message": "b"},
@@ -974,7 +988,7 @@ def test_memory_labels_are_served_and_rendered(tmp_path: Path) -> None:
     )
     app = create_ui_app(profile=profile, adapter=FakeAdapter(source))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         payload = client.get("/api/ui").json()
         script = client.get("/assets/app.js")
         page = client.get("/")
@@ -1012,7 +1026,7 @@ def test_a_generation_is_removed_only_with_a_matching_confirmation(
     app = create_ui_app(profile=_profile(generations=True), adapter=adapter)
     generation_id = "20260930T191235Z-45608dc5"
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["generations"] is True
         removed = client.post(
             "/api/generations/remove",
@@ -1051,7 +1065,7 @@ def test_a_generation_cannot_be_removed_where_the_capability_is_off(
     app = create_ui_app(profile=_profile(generations=False), adapter=adapter)
     generation_id = "20260930T191235Z-45608dc5"
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["generations"] is False
         refused = client.post(
             "/api/generations/remove",
@@ -1067,7 +1081,7 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
 
     app = create_ui_app(profile=_profile(), adapter=FakeAdapter(Path("evidence.pdf")))
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         page = client.get("/").text
         javascript = client.get("/assets/app.js").text
 
@@ -1289,7 +1303,7 @@ def test_a_host_reports_the_projects_it_serves_and_its_own_client_entry(
         profile=_profile(projects=True, agent_entry=True), adapter=adapter
     )
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["projects"] is True
         projects = client.get("/api/projects")
         entry = client.get("/api/agent-entry")
@@ -1336,7 +1350,7 @@ def test_the_projects_and_agent_entry_routes_are_absent_when_the_flags_are_off(
 
     adapter = FakeAdapter(_source(tmp_path))
 
-    with TestClient(
+    with _client(
         create_ui_app(
             profile=_profile(projects=False, agent_entry=False), adapter=adapter
         )
@@ -1362,7 +1376,7 @@ def test_settings_are_read_and_written_through_the_adapter(tmp_path: Path) -> No
     adapter = FakeAdapter(_source(tmp_path))
     app = create_ui_app(profile=_profile(settings=True), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["settings"] is True
         read = client.get("/api/settings")
         written = client.post(
@@ -1404,7 +1418,7 @@ def test_the_settings_routes_are_absent_when_the_capability_is_off(
     adapter = FakeAdapter(_source(tmp_path))
     app = create_ui_app(profile=_profile(settings=False), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["settings"] is False
         read = client.get("/api/settings")
         write = client.post(
@@ -1423,7 +1437,7 @@ def test_a_settings_write_is_same_origin_and_json_only(tmp_path: Path) -> None:
     adapter = FakeAdapter(_source(tmp_path))
     body = {"values": {"retrieval.rrf_k": 40}, "expected_revision": "rev-1"}
 
-    with TestClient(
+    with _client(
         create_ui_app(profile=_profile(settings=True), adapter=adapter)
     ) as client:
         cross_origin = client.post(
@@ -1444,7 +1458,7 @@ def test_chunk_exclusions_are_listed_and_one_chunk_is_set(tmp_path: Path) -> Non
     adapter = FakeAdapter(_source(tmp_path))
     app = create_ui_app(profile=_profile(chunk_exclusion=True), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["chunk_exclusion"] is True
         listed = client.get("/api/chunk-exclusions")
         excluded = client.post(
@@ -1476,7 +1490,7 @@ def test_the_chunk_routes_are_absent_when_the_capability_is_off(tmp_path: Path) 
     adapter = FakeAdapter(_source(tmp_path))
     app = create_ui_app(profile=_profile(chunk_exclusion=False), adapter=adapter)
 
-    with TestClient(app) as client:
+    with _client(app) as client:
         assert client.get("/api/ui").json()["capabilities"]["chunk_exclusion"] is False
         listed = client.get("/api/chunk-exclusions")
         excluded = client.post(
@@ -1496,7 +1510,7 @@ def test_a_chunk_inclusion_write_is_same_origin_and_json_only(
     body = {"chunk_id": "chunk-9", "included": False, "reason": "why"}
     form = {"Content-Type": "application/x-www-form-urlencoded"}
 
-    with TestClient(
+    with _client(
         create_ui_app(profile=_profile(chunk_exclusion=True), adapter=adapter)
     ) as client:
         cross_origin = client.post(
@@ -1509,3 +1523,64 @@ def test_a_chunk_inclusion_write_is_same_origin_and_json_only(
     assert cross_origin.status_code == 403
     assert form_encoded.status_code == 415
     assert not any(operation == "set_chunk_inclusion" for operation, _ in adapter.calls)
+
+
+# -- whose request this workspace answers -----------------------------------------
+
+
+def test_a_request_naming_another_host_is_refused_before_any_route(
+    tmp_path: Path,
+) -> None:
+    """A page on a domain resolving here names that domain in Host and in Origin alike.
+
+    The origin comparison alone is then satisfied by the page, so the name is checked
+    as well, before a route runs: this workspace edits memories.
+    """
+
+    client = _sql_host(FakeAdapter(_source(tmp_path)))
+    refused = client.post(
+        "/api/sql/execute",
+        json={"scope": "demo", "statement": "DELETE FROM unit"},
+        headers={"host": "attacker.example", "origin": "http://attacker.example"},
+    )
+    assert refused.status_code == 403
+    assert "loopback" in refused.json()["error"]
+
+
+def test_a_read_naming_another_host_is_refused_too(tmp_path: Path) -> None:
+    """A refused read is a refused write: under rebinding the browser would see both."""
+
+    client = _sql_host(FakeAdapter(_source(tmp_path)))
+    refused = client.get("/api/status", headers={"host": "attacker.example"})
+    assert refused.status_code == 403
+
+
+def test_a_malformed_host_is_an_answer_rather_than_a_failure(tmp_path: Path) -> None:
+    client = _sql_host(FakeAdapter(_source(tmp_path)))
+    refused = client.get("/api/status", headers={"host": "127.0.0.1:not-a-port"})
+    assert refused.status_code == 403
+
+
+def test_an_origin_this_app_did_not_serve_is_refused(tmp_path: Path) -> None:
+    with _sql_host(FakeAdapter(_source(tmp_path))) as client:
+        refused = client.post(
+            "/api/settings",
+            json={"settings": {"runtime.log_level": "debug"}, "revision": "1"},
+            headers={"origin": "http://elsewhere.example"},
+        )
+    assert refused.status_code == 403
+    assert "Cross-origin" in refused.json()["error"]
+
+
+def test_an_origin_that_cannot_be_parsed_is_refused_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    """A malformed header is a 403, not the app's own 500."""
+
+    with _sql_host(FakeAdapter(_source(tmp_path))) as client:
+        refused = client.post(
+            "/api/settings",
+            json={"settings": {"runtime.log_level": "debug"}, "revision": "1"},
+            headers={"origin": "http://[::1"},
+        )
+    assert refused.status_code == 403

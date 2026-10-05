@@ -72,6 +72,8 @@ class UICapabilities:
     # and a generator here would be a second place for a client's configuration
     # to be wrong.
     agent_entry: bool = False
+    # Release checking only; installation and approval remain in the terminal.
+    updates: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return asdict(self)
@@ -96,6 +98,11 @@ class UIProfile:
         "Included documents will be extracted and indexed. The current generation "
         "remains active unless the complete build succeeds."
     )
+    # Whether a build can be continued is the host's own fact about its own
+    # pipeline. An empty string means the host makes no claim and the workspace
+    # shows no sentence, so a shared page cannot promise checkpointing on behalf
+    # of an app that does not checkpoint.
+    ingest_resume_note: str = ""
     ingest_busy_message: str = "Building the indexes. This can take several minutes…"
     footer_text: str = ""
     result_text_label: str = "Retrieved passage"

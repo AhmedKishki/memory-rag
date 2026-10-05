@@ -34,7 +34,7 @@ from pydantic import Field
 from ..instructions import SERVER_INSTRUCTIONS
 from ..models import ModelError
 from ..registry import RegistryError
-from ..service import MemoryService
+from ..service import MAX_RECALL_LIMIT, MemoryService
 from ..store import KINDS, SCOPE_EITHER, Kind, StoreError
 
 SERVER_NAME = "memory-rag"
@@ -44,9 +44,10 @@ MCP_PATH = "/mcp"
 
 #: How many statements one read may return. A memory grows by appending, so a read is
 #: capped and says so; the cap is a parameter so a caller that needs more can ask for
-#: more deliberately.
+#: more deliberately, and the ceiling is the service's own rather than a number this
+#: surface repeats.
 DEFAULT_RESULT_LIMIT = 10
-MAX_RESULT_LIMIT = 50
+MAX_RESULT_LIMIT = MAX_RECALL_LIMIT
 
 ContentParameter = Annotated[
     str,
@@ -170,8 +171,8 @@ def _declare_recorder(server: FastMCP[Any], service: MemoryService, kind: Kind) 
     summary = kind.summary
     if takes_scope:
         summary += (
-            "\n\nChoose the memory with `scope`: \"local\" is this project and "
-            "\"global\" is the account's, shared by every project on this machine."
+            '\n\nChoose the memory with `scope`: "local" is this project and '
+            '"global" is the account\'s, shared by every project on this machine.'
         )
     else:
         summary += (
@@ -185,9 +186,7 @@ def _declare_recorder(server: FastMCP[Any], service: MemoryService, kind: Kind) 
             content: ContentParameter,
             scope: ScopeParameter = "local",
         ) -> dict[str, Any]:
-            return await _guarded(
-                service.record(content, kind=kind.name, scope=scope)
-            )
+            return await _guarded(service.record(content, kind=kind.name, scope=scope))
 
     else:
 
@@ -206,7 +205,9 @@ def _declare_recorder(server: FastMCP[Any], service: MemoryService, kind: Kind) 
 def _declare_recall(server: FastMCP[Any], service: MemoryService, kind: Kind) -> None:
     """Add the tool that recalls from one kind."""
 
-    async def recall(query: QueryParameter, limit: LimitParameter = DEFAULT_RESULT_LIMIT):
+    async def recall(
+        query: QueryParameter, limit: LimitParameter = DEFAULT_RESULT_LIMIT
+    ):
         return await _guarded(service.recall(query, kind=kind.name, limit=limit))
 
     summary = (
@@ -289,14 +290,6 @@ def _app_state(
     """Return the installation facts a recall answer carries."""
 
     return {**service.describe(), **(app_state() if app_state else {})}
-
-
-def _with_app(
-    answer: dict[str, Any],
-    service: MemoryService,
-    app_state: Callable[[], dict[str, Any]] | None,
-) -> dict[str, Any]:
-    return answer
 
 
 async def _guarded(awaitable: Any) -> dict[str, Any]:

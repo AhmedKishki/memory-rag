@@ -109,6 +109,37 @@ def test_the_json_flag_is_available_on_every_command() -> None:
     assert arguments.json is True
 
 
+def test_recording_a_statement_names_the_kind_it_is_filed_under() -> None:
+    """There is no default kind, so the command line asks for one.
+
+    The kinds are a closed list and a statement filed under nothing is a category no
+    later recall can ask for, so a default would file statements where they cannot be
+    found. `store.DEFAULT_KIND` exists for reading an older document and is not one of
+    the kinds, so a parser default naming it would refuse every write it produced.
+    """
+
+    parser = _parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["record", "a statement"])
+    arguments = parser.parse_args(["record", "a statement", "--kind", "RULE"])
+    assert arguments.kind == "RULE"
+    assert arguments.scope == "local"
+
+
+def test_the_two_surfaces_take_the_recall_bound_from_the_service() -> None:
+    """One number, and the service owns it.
+
+    The browser, the agent surface, and the terminal all reach the same service, so a
+    ceiling repeated in two of them is a ceiling the third does not have.
+    """
+
+    from memory_rag.service import MAX_RECALL_LIMIT
+    from memory_rag.surfaces import cli, mcp
+
+    assert cli.MAX_RESULT_LIMIT == MAX_RECALL_LIMIT
+    assert mcp.MAX_RESULT_LIMIT == MAX_RECALL_LIMIT
+
+
 # -- the terminal reaches what the browser reaches ------------------------------
 
 
