@@ -1584,3 +1584,24 @@ def test_an_origin_that_cannot_be_parsed_is_refused_rather_than_raising(
             headers={"origin": "http://[::1"},
         )
     assert refused.status_code == 403
+
+
+def test_the_page_and_its_assets_are_revalidated_against_a_stale_cache(
+    tmp_path: Path,
+) -> None:
+    """The page and its assets share one revision, and API reads are never cached.
+
+    An updated page served against a cached script throws before it draws, so the
+    page and every asset are revalidated on each load. API reads are not stored,
+    so a memory is never read from a cache.
+    """
+
+    app = create_ui_app(profile=_profile(), adapter=FakeAdapter(_source(tmp_path)))
+    with _client(app) as client:
+        page = client.get("/")
+        asset = client.get("/assets/app.js")
+        api = client.get("/api/ui")
+
+    assert page.headers["cache-control"] == "no-cache"
+    assert asset.headers["cache-control"] == "no-cache"
+    assert api.headers["cache-control"] == "no-store"
