@@ -612,11 +612,9 @@ function syncFilterSummary() {
 // A value typed into a field the disclosure has closed is invisible, so adding a
 // value from a list opens the drawer that holds it. A reader who selected one of
 // the partitions below then sees where it went.
-function revealFilterField(field) {
+function revealFilterDrawer() {
   const drawer = byId("filter-fields");
   if (drawer && !drawer.open) drawer.open = true;
-  const group = byId(field).closest(".filter-group");
-  if (group) group.dataset.filled = "true";
 }
 
 function addSearchFilter(field, value) {
@@ -625,7 +623,7 @@ function addSearchFilter(field, value) {
   const values = listValue(input.value);
   if (!values.includes(value)) values.push(value);
   input.value = values.join(", ");
-  revealFilterField(field);
+  revealFilterDrawer();
   syncFilterSummary();
   input.focus();
   toast(`Added to the search filter: ${value}`);

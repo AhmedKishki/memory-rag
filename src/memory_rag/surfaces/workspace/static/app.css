@@ -729,8 +729,7 @@ h3 {
 }
 
 .empty-state,
-.no-records,
-.loading-row {
+.no-records {
   margin-top: var(--space-sm);
   padding: var(--space-lg);
   border: 1px dashed var(--border-subtle);
@@ -1285,14 +1284,16 @@ textarea:disabled {
   font-size: var(--text-sm);
 }
 
-.sql-actions {
+/* A row of controls with the sentence that qualifies them beside it. The SQL
+   console, the settings form, and the MCP endpoints all end in one. */
+.action-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2xs);
 }
 
-.sql-write-note {
+.action-note {
   max-width: var(--measure);
   flex: 1 1 20rem;
   color: var(--text-secondary);
@@ -1782,7 +1783,7 @@ textarea:disabled {
 .dialog {
   width: min(38rem, calc(100% - 2rem));
   max-height: calc(100vh - 2rem);
-  padding: 0;
+  padding: var(--space-lg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
@@ -1795,15 +1796,12 @@ textarea:disabled {
   background: rgb(0 0 0 / 45%);
 }
 
-.dialog form,
-.dialog-context {
-  padding: var(--space-lg);
-}
-
 .dialog-wide {
   width: min(48rem, calc(100% - 2rem));
 }
 
+/* Width alone. Padding is the dialog's, so a dialog that holds no form pads its
+   heading and its body alike rather than insetting one and not the other. */
 .dialog-context {
   width: min(58rem, calc(100% - 2rem));
 }
@@ -2261,8 +2259,7 @@ textarea:disabled {
     padding: var(--space-sm);
   }
 
-  .dialog form,
-  .dialog-context {
+  .dialog {
     padding: var(--space-md);
   }
 }
