@@ -1076,6 +1076,41 @@ def test_a_generation_cannot_be_removed_where_the_capability_is_off(
     assert adapter.calls == []
 
 
+def test_generation_loading_is_absent_where_the_capability_is_off(
+    tmp_path: Path,
+) -> None:
+    """Loading a generation is a research capability this app does not serve.
+
+    The shared workspace ships the route and the controls, but with generations
+    off the panel stays hidden and a load is refused before any adapter sees it.
+    """
+
+    source = tmp_path / "evidence.pdf"
+    source.write_bytes(b"%PDF-1.4\n% test\n")
+    adapter = FakeAdapter(source)
+    app = create_ui_app(profile=_profile(generations=False), adapter=adapter)
+
+    with _client(app) as client:
+        profile = client.get("/api/ui").json()
+        page = client.get("/").text
+        loaded = client.post(
+            "/api/generations/use",
+            json={"generation_id": "20260930T191235Z-45608dc5"},
+        )
+
+    assert profile["capabilities"]["generations"] is False
+    # The controls ship in the page but stay hidden unless a host turns them on.
+    assert 'data-capability="generations" hidden' in page
+    assert loaded.status_code == 404
+    assert adapter.calls == []
+
+
+def test_the_memory_profile_serves_no_generation_capability() -> None:
+    from memory_rag.surfaces.ui import PROFILE
+
+    assert PROFILE.capabilities.generations is False
+
+
 def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     """The listing is free in the status payload, so the panel needs only markup."""
 
@@ -1088,6 +1123,7 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     assert 'id="generation-chips"' in page
     assert 'data-capability="generations"' in page
     assert 'id="generation-dialog"' in page
+    assert 'id="generation-load-dialog"' in page
     # The remove button stays disabled until the typed id matches, so the
     # confirmation is a gate rather than a message.
     assert 'id="generation-submit"' in page and "disabled" in page
@@ -1095,6 +1131,8 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     assert "renderGenerations(status.generations || [])" in javascript
     assert 'byId("generation-confirm").addEventListener' in javascript
     assert "/api/generations/remove" in javascript
+    assert "/api/generations/use" in javascript
+    assert 'byId("generation-load-form").addEventListener' in javascript
     # The one a search reads is not offered a removal it would only refuse.
     assert "if (!generation.is_current)" in javascript
 

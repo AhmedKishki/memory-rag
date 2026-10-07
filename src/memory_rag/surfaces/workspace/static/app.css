@@ -1125,6 +1125,11 @@ textarea:disabled {
   margin-left: auto;
 }
 
+/* Two actions on one retained build sit together at the far end of the row. */
+.record-row-head > .text-button + .text-button {
+  margin-left: 0;
+}
+
 /* A damaged manifest is named where the reader can act on it, never folded into
    a count. */
 .record-warning {
@@ -1132,6 +1137,54 @@ textarea:disabled {
   color: var(--warning);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+/* The recorded configuration is read, not acted on: a one-line summary for
+   comparing builds, and the whole of it behind a disclosure. */
+.recorded-config-summary {
+  margin: var(--space-2xs) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.recorded-config {
+  margin-top: var(--space-2xs);
+  font-size: var(--text-sm);
+}
+
+.recorded-config-title {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.recorded-config .fact-list {
+  margin: var(--space-2xs) 0;
+}
+
+.recorded-config-label {
+  margin: var(--space-2xs) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.recorded-config-json {
+  margin: var(--space-2xs) 0 0;
+  padding: var(--space-2xs) var(--space-xs);
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
